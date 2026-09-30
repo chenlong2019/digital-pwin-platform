@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { GUIDE } from '../docs/guide'
 import { slugify } from '../docs/markdown'
-import { SPEC_CHAPTERS, SPEC_PARTS } from '../docs/spec'
+import { SPEC_CHAPTERS, SPEC_PARTS, SPEC_PRELUDE, SPEC_PRELUDE_SECTIONS } from '../docs/spec'
 
 /** 从当前工作目录往上找仓库根(带 workspaces 的那层) */
 function findRepoRoot(): string {
@@ -101,6 +101,34 @@ describe('目录分组', () => {
         expect(numbers[i], `分区「${part.title}」的章节号断了`).toBe((numbers[i - 1] ?? 0) + 1)
       }
     }
+  })
+})
+
+describe('README 快速开始', () => {
+  it('排在编号章节之前,所以侧栏要单独给它一个入口', () => {
+    const ids = SPEC_PRELUDE_SECTIONS.map((heading) => heading.id)
+    expect(ids, 'README 文件头里找不到「快速开始」').toContain('快速开始')
+    // 它不该占用编号,否则 92 章整体错位、代码里引用的 §74 之类全会失准
+    expect(SPEC_CHAPTERS.map((chapter) => chapter.title)).not.toContain('快速开始')
+  })
+
+  it('正文里点名的 npm run 脚本,在根 package.json 里真实存在', () => {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>
+    }
+    const scripts = Object.keys(pkg.scripts ?? {})
+    const used = [...SPEC_PRELUDE.html.matchAll(/npm run ([a-z][\w:-]*)/g)].map((match) => match[1] ?? '')
+
+    expect(used.length, '快速开始里没写任何 npm run 命令').toBeGreaterThan(3)
+    for (const name of new Set(used)) {
+      expect(scripts, `快速开始里的 npm run ${name} 在根 package.json 里不存在`).toContain(name)
+    }
+  })
+
+  it('内容确实进了文档页正文,而不是只躺在 README 里', () => {
+    expect(SPEC_PRELUDE.html).toContain('快速开始')
+    expect(SPEC_PRELUDE.html).toContain('npm ci')
+    expect(SPEC_PRELUDE.html).toContain('http://localhost:5173')
   })
 })
 
