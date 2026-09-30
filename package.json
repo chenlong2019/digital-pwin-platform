@@ -1,0 +1,32 @@
+{
+  "name": "simulation-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "通用智能体仿真与数字孪生平台 · Simulation Core + Agent Core + Sandbox + Task + Recorder + Domain API + Adapter",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": {
+    "node": "^22.18.0 || >=24.12.0"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @simulation/drone-simulator",
+    "build": "npm run build -w @simulation/drone-simulator",
+    "preview": "npm run preview -w @simulation/drone-simulator",
+    "test:unit": "npm run test:unit --workspaces --if-present",
+    "check:arch": "node scripts/check-architecture.mjs",
+    "type-check": "npm run check:arch && npm run type-check --workspaces --if-present",
+    "verify": "npm run type-check && npm run build",
+    "format": "prettier --write --experimental-cli \"packages/*/src/**/*.ts\" \"apps/*/src/**/*.{ts,vue}\" \"scripts/*.mjs\""
+  },
+  "devDependencies": {
+    "@tsconfig/node24": "^24.0.5",
+    "@types/node": "^24.13.4",
+    "@vue/tsconfig": "^0.9.1",
+    "npm-run-all2": "^9.0.3",
+    "prettier": "3.9.6",
+    "typescript": "~6.0.0",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11",
+    "vue-tsc": "^3.3.11"
+  }
+}

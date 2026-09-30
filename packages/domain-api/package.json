@@ -1,0 +1,24 @@
+{
+  "name": "@simulation/domain-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "业务入口:SimulationDomainAPI + Authority + Command 路由",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/agent-core": "*",
+    "@simulation/contracts": "*",
+    "@simulation/drone-agent": "*",
+    "@simulation/recorder": "*",
+    "@simulation/sandbox-core": "*",
+    "@simulation/simulation-core": "*",
+    "@simulation/task-core": "*"
+  }
+}

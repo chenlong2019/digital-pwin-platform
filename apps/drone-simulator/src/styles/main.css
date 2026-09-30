@@ -1,0 +1,267 @@
+/**
+ * 全局样式 —— 沙盒界面的深色 HUD 基调。
+ * 配色刻意与 three 场景保持一致(背景 #0a141b、强调色 #6ff0d0 / #7fd8ff),
+ * 这样三维视口与面板看起来是同一块屏幕,而不是网页里嵌了张图。
+ */
+:root {
+  --bg: #060d12;
+  --panel: #0c181f;
+  --panel-soft: #0a141a;
+  --panel-raised: #10222b;
+  --border: #17323d;
+  --border-soft: #12262e;
+  /** 比 --border 亮一档:流程图连线这类需要看得清、又不能抢戏的地方 */
+  --border-strong: #2b5361;
+  --text: #d9edf2;
+  --text-dim: #9ab6c0;
+  --text-faint: #6a8791;
+  --accent: #6ff0d0;
+  --accent-soft: rgba(111, 240, 208, 0.14);
+  --info: #7fd8ff;
+  --warn: #ffc46b;
+  --danger: #ff6f7e;
+  --success: #6ff0d0;
+  --radius: 10px;
+  --mono: 'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Consolas, 'Liberation Mono', monospace;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+}
+
+button {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 11px;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+button:hover:not(:disabled) {
+  background: #16303c;
+  border-color: #23505f;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent-soft);
+  border-color: rgba(111, 240, 208, 0.45);
+  color: var(--accent);
+}
+
+button.primary:hover:not(:disabled) {
+  background: rgba(111, 240, 208, 0.22);
+  border-color: var(--accent);
+}
+
+button.danger {
+  border-color: rgba(255, 111, 126, 0.45);
+  color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+  background: rgba(255, 111, 126, 0.14);
+  border-color: var(--danger);
+}
+
+button.ghost {
+  background: transparent;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--panel-raised);
+}
+
+button.active {
+  background: var(--accent-soft);
+  border-color: rgba(111, 240, 208, 0.5);
+  color: var(--accent);
+}
+
+select,
+input[type='number'],
+input[type='text'] {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 7px;
+  width: 100%;
+}
+
+input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+/* ————————————————————— 通用版式 ————————————————————— */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex: 0 0 auto;
+}
+
+.panel__title {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+.panel__body {
+  padding: 10px 12px;
+  overflow: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row--between {
+  justify-content: space-between;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.field-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.tag--ok {
+  color: var(--success);
+  border-color: rgba(111, 240, 208, 0.4);
+  background: rgba(111, 240, 208, 0.1);
+}
+
+.tag--warn {
+  color: var(--warn);
+  border-color: rgba(255, 196, 107, 0.4);
+  background: rgba(255, 196, 107, 0.1);
+}
+
+.tag--danger {
+  color: var(--danger);
+  border-color: rgba(255, 111, 126, 0.4);
+  background: rgba(255, 111, 126, 0.1);
+}
+
+.tag--info {
+  color: var(--info);
+  border-color: rgba(127, 216, 255, 0.4);
+  background: rgba(127, 216, 255, 0.1);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1b3944;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #24505f;
+}

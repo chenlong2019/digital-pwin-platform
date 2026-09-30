@@ -1,0 +1,22 @@
+{
+  "name": "@simulation/three-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Three.js 渲染适配器:只消费 Snapshot,不认识领域遥测",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/contracts": "*",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0"
+  }
+}
