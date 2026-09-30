@@ -67,6 +67,16 @@ const MANIFEST = {
   'mcp-server': { layer: 'Integration', allow: ['contracts', 'domain-api'], dir: 'mcp/mcp-server' },
 
   'drone-simulator': { layer: 'Application', allow: ['*'], dir: 'apps/drone-simulator' },
+  // README §29 声明了「每个领域各配一个产品应用」,这两个是已规划未实现 ——
+  // 登记在这里,等目录一出现守卫就会自动开始检查它们的依赖方向
+  'vehicle-simulator': { layer: 'Application', allow: ['*'], dir: 'apps/vehicle-simulator' },
+  'robot-simulator': { layer: 'Application', allow: ['*'], dir: 'apps/robot-simulator' },
+
+  // 服务侧宿主(README §29 的推荐仓库结构 · §59~§61)。它们也是「宿主」,
+  // 不是被依赖的能力包,所以放在 Application 层、目录不在 packages/ 下
+  'simulation-server': { layer: 'Application', allow: ['*'], dir: 'services/simulation-server' },
+  'realtime-server': { layer: 'Application', allow: ['*'], dir: 'services/realtime-server' },
+  'persistence-server': { layer: 'Application', allow: ['*'], dir: 'services/persistence-server' },
 }
 
 /** 各层禁止依赖的外部运行时库 */

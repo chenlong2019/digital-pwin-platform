@@ -338,6 +338,27 @@ export interface Task {
   getSnapshot(): TaskSnapshot
 }
 
+// ————————————————————————————— MediaAsset —————————————————————————————
+//
+// 媒体不直接塞进 Agent Core(README §23 最后一句):Agent 只知道「我拍了张照」,
+// 不知道照片存在哪、多大、什么编码。所以这里只定义统一的引用结构,
+// 由 Result(§57)聚合、由录制/存储侧填充。
+
+export type MediaKind = 'photo' | 'video' | 'screenshot' | 'sensor'
+
+/** 统一媒体模型(README §23) */
+export interface MediaAsset {
+  readonly id: string
+  readonly type: MediaKind
+  /** 数据位置:`blob:` / `object-url:` / 远端地址 / 本地文件名 */
+  readonly uri: string
+  /** 采集时刻的**仿真时间**,不是墙上时钟 */
+  readonly timestamp: number
+  readonly agentId?: AgentId
+  readonly taskId?: TaskId
+  readonly metadata?: Readonly<Record<string, unknown>>
+}
+
 // ————————————————————————————— Snapshot —————————————————————————————
 
 /** 某个 Simulation Tick 对外发布的状态快照 */

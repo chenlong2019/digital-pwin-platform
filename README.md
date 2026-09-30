@@ -57,6 +57,9 @@ packages/                各层能力包，按六层架构分层（§40）
   drone-agent/           无人机领域智能体（DJI Mini 4 Pro）
   task-core/             任务与航点
   recorder/              事件 / 指令 / 快照记录
+  result/                任务结果聚合：TaskResult / 统计 / 导出
+  replay/                历史回放：时间轴 / 控制器 / 快照采样
+  input/                 用户输入：键盘 / 摇杆 → InputIntent
   domain-api/            领域门面：外部唯一入口
   three-adapter/         渲染适配层（three.js 隔离在此）
 apps/
@@ -70,6 +73,50 @@ apps/
 | `/` | 无人机沙盒 |
 | `/flow` | 模块流程图与依赖关系 |
 | `/docs` | 项目文档：使用手册 + 本规范全文 |
+
+---
+
+# 实现状态
+
+规范是终态，代码在推进 —— 这一节只记录**当前仓库里真的存在什么**，
+以及各项验收指标是否已经有对应的自动化测试兜住。它由文档页的对账测试
+（`src/__tests__/docs.spec.ts`）与架构守卫的包清单互相钉住：这里写「已落地」
+而目录不存在、或写「未实现」而目录已经出现，测试都会红。
+
+## 已落地（13 个包 + 1 个应用）
+
+| 层 | 模块 |
+| --- | --- |
+| Core | `contracts` `simulation-core` `agent-core` `sandbox-core` |
+| Capability | `task-core` `recorder` `result` `replay` `input` |
+| Domain | `drone-agent` |
+| API | `domain-api` |
+| Adapter | `three-adapter` |
+| Application | `drone-simulator` |
+
+## 未实现（按规划）
+
+| 层 | 模块 |
+| --- | --- |
+| Capability | `collaboration` `realtime` |
+| Domain | `vehicle-agent` `boat-agent` `robot-agent` |
+| Adapter | `cesium-adapter` `device-adapters` |
+| Integration | `mcp-server` |
+| Application | `vehicle-simulator` `robot-simulator` |
+| 服务 | `simulation-server` `realtime-server` `persistence-server` |
+
+## 验收指标
+
+| 指标 | 状态 | 对应的自动化测试 |
+| --- | --- | --- |
+| §75 确定性（相同输入 ⇒ 等价结果） | 已落地 | `src/__tests__/determinism.spec.ts` |
+| §75 固定步长 / 不掉步 / 超时不追帧 | 已落地 | 同上 |
+| §76 Task 成功率 ≥ 99% | 已落地 | 同上（重复执行航点任务） |
+| §77 Recorder（Event 不丢失 / Command 可追踪 / Track 完整 / 时间戳连续） | 已落地 | 同上 |
+| §77 Replay（与记录状态容差内一致） | 已落地 | 同上 + `src/__tests__/result-replay.spec.ts` |
+| §74 架构静态检查（依赖方向 / 循环依赖 / 隔离） | 已落地 | `npm run check:arch` |
+| §75 启动性能 / 渲染帧率 / 输入延迟 | 待补 | 需要真机基准与渲染计时采样 |
+| §78–§86 多人协同 / 内存 / 兼容性 / 安全 / 包迁移 | 待补 | 依赖未实现的模块 |
 
 ---
 

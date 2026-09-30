@@ -1,0 +1,19 @@
+{
+  "name": "@simulation/result",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "任务结果聚合:TaskResult / ResultSummary / Statistics / ResultExporter(README §21 · §57)",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/contracts": "*",
+    "@simulation/recorder": "*"
+  }
+}
