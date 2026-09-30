@@ -1,0 +1,49 @@
+{
+  "name": "@simulation/drone-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Application 层 —— 无人机沙盒仿真的唯一 UI 宿主(README §42:只有应用层可以依赖 vue)",
+  "scripts": {
+    "dev": "vite",
+    "build": "run-p type-check \"build-only {@}\" --",
+    "preview": "vite preview",
+    "test:unit": "vitest run",
+    "build-only": "vite build",
+    "type-check": "vue-tsc --build"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
+    "@simulation/contracts": "*",
+    "@simulation/domain-api": "*",
+    "@simulation/drone-agent": "*",
+    "@simulation/sandbox-core": "*",
+    "@simulation/task-core": "*",
+    "@simulation/three-adapter": "*",
+    "@vue-flow/background": "^1.3.2",
+    "@vue-flow/controls": "^1.1.3",
+    "@vue-flow/core": "^1.48.2",
+    "@vue-flow/minimap": "^1.5.4",
+    "markdown-it": "^15.0.2",
+    "pinia": "^3.0.4",
+    "three": "^0.186.1",
+    "vue": "^3.5.43",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.1",
+    "@tsconfig/node24": "^24.0.5",
+    "@types/jsdom": "^28.0.0",
+    "@types/node": "^24.13.4",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/tsconfig": "^0.9.1",
+    "jsdom": "^30.1.1",
+    "npm-run-all2": "^9.0.3",
+    "typescript": "~6.0.0",
+    "vite": "^8.2.2",
+    "vite-plugin-vue-devtools": "^8.0.5",
+    "vitest": "^4.1.11",
+    "vue-tsc": "^3.3.11"
+  }
+}

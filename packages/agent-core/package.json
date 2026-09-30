@@ -1,0 +1,18 @@
+{
+  "name": "@simulation/agent-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent Contract 与生命周期注册表",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/contracts": "*"
+  }
+}
