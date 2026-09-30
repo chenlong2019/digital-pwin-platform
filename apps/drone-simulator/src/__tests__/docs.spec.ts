@@ -132,6 +132,75 @@ describe('README 快速开始', () => {
   })
 })
 
+describe('README 实现状态', () => {
+  /**
+   * 从「实现状态」小节里读模块清单。
+   *
+   * 约定:该小节用两张表分别列「已落地」与「未实现」,表里的模块名一律写成
+   * 行内代码(`` `contracts` ``)。这个约定让 README 与架构守卫可以互相钉住 ——
+   * 文档说「已落地」而目录不存在,或说「未实现」而目录已经出现,这里就会红。
+   */
+  function readStatusSection(): { shipped: string[]; planned: string[] } {
+    const section = /^# 实现状态\s*$([\s\S]*?)^# /m.exec(README)?.[1]
+    expect(section, 'README 里找不到「实现状态」小节').toBeTruthy()
+    if (!section) return { shipped: [], planned: [] }
+
+    const [head, tail = ''] = section.split('## 未实现')
+    const plannedPart = tail.split('## 验收指标')[0] ?? ''
+    const names = (text: string): string[] =>
+      [...text.matchAll(/`([a-z][a-z0-9-]*)`/g)].map((match) => match[1] ?? '')
+
+    return { shipped: names(head ?? ''), planned: names(plannedPart) }
+  }
+
+  /** 架构守卫登记的模块(名称 → 目录) */
+  function readManifest(): Map<string, string> {
+    const source = readFileSync(join(REPO_ROOT, 'scripts', 'check-architecture.mjs'), 'utf8')
+    const pattern =
+      /^\s{2}'?([a-z][a-z0-9-]*)'?:\s*\{\s*layer:\s*'([A-Za-z]+)',\s*allow:\s*\[([^\]]*)\],\s*dir:\s*'([^']+)'/gm
+    const entries = new Map<string, string>()
+    for (const match of source.matchAll(pattern)) {
+      const [, name, , , dir] = match
+      if (name && dir) entries.set(name, dir)
+    }
+    return entries
+  }
+
+  const status = readStatusSection()
+  const manifest = readManifest()
+
+  it('能解析出「已落地」与「未实现」两张清单', () => {
+    expect(manifest.size, '没能从架构守卫里抽出模块清单').toBeGreaterThanOrEqual(20)
+    expect(status.shipped.length).toBeGreaterThanOrEqual(10)
+    expect(status.planned.length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('「已落地」里的模块:守卫里有登记,而且目录真的存在', () => {
+    for (const name of status.shipped) {
+      const dir = manifest.get(name)
+      expect(dir, `实现状态里说 ${name} 已落地,但它没登记在架构守卫里`).toBeDefined()
+      expect(existsSync(join(REPO_ROOT, dir ?? '')), `实现状态里说 ${name} 已落地,但 ${dir} 不存在`).toBe(true)
+    }
+  })
+
+  it('「未实现」里的模块:守卫里有登记,而且目录确实还没出现', () => {
+    for (const name of status.planned) {
+      const dir = manifest.get(name)
+      expect(dir, `实现状态里说 ${name} 未实现,但它没登记在架构守卫里`).toBeDefined()
+      expect(
+        existsSync(join(REPO_ROOT, dir ?? '')),
+        `实现状态里说 ${name} 未实现,但 ${dir} 已经存在了 —— 该把它挪进「已落地」`,
+      ).toBe(false)
+    }
+  })
+
+  it('两张表合起来恰好覆盖守卫登记的全部模块,不重不漏', () => {
+    const listed = [...status.shipped, ...status.planned].sort()
+    expect(new Set(listed).size, '实现状态里出现了重复模块').toBe(listed.length)
+    expect(listed).toEqual([...manifest.keys()].sort())
+  })
+})
+
 describe('使用手册', () => {
   it('章节各有唯一 id,而且正文确实渲染了', () => {
     const heads = GUIDE.headings.filter((heading) => heading.level === 1)

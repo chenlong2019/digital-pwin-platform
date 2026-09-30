@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { test, expect } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 
 /**
  * 非云台视角下的拍照与录像取景。
@@ -54,6 +54,47 @@ async function imageDiff(page: Page, dataUrlA: string, dataUrlB: string): Promis
 async function shotDataUrl(page: Page): Promise<string> {
   const buffer = await page.locator('.viewport__canvas canvas').screenshot()
   return `data:image/png;base64,${buffer.toString('base64')}`
+}
+
+/**
+ * 取两张基准帧:机载视角( = 云台取景)与观察者视角。
+ *
+ * 相机模式切换是「点了立刻生效、画面下一帧才变」的:冷启动时(第一次进云台页、
+ * 模型刚绑上节点)单次固定等待会不够 —— 那时两张基准帧其实都是同一个视角,
+ * 于是后面「照片应当等于云台取景」会以一个完全无关的理由红掉。
+ * 所以这里改成条件取样:两视角没有明显差异就重取,直到成立或超出重试预算。
+ * 判据本身没有放宽(仍然是「必须明显不同」),只是不再赌时序。
+ *
+ * 返回时停在观察者视角 —— 调用方正好要在那里按快门。
+ */
+async function captureDistinctViews(
+  page: Page,
+  panel: Locator,
+  attempts = 6,
+): Promise<{ gimbalShot: string; observerShot: string; diff: number }> {
+  const fpv = panel.getByTestId('fpv-toggle')
+  let gimbalShot = ''
+  let observerShot = ''
+  let diff = 0
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    // 机载视角
+    if ((await fpv.innerText()).trim() !== '退出机载视角') await fpv.click()
+    await expect(fpv).toHaveText('退出机载视角')
+    await page.waitForTimeout(900)
+    gimbalShot = await shotDataUrl(page)
+
+    // 观察者视角:这是用户实际在看、但**不该**被拍下来的画面
+    await fpv.click()
+    await expect(fpv).toHaveText('切到机载视角')
+    await page.waitForTimeout(900)
+    observerShot = await shotDataUrl(page)
+
+    diff = await imageDiff(page, gimbalShot, observerShot)
+    if (diff > DIFFERENT_VIEW_MIN_DIFF) break
+  }
+
+  return { gimbalShot, observerShot, diff }
 }
 
 /**
@@ -122,19 +163,9 @@ test('观察者视角下拍照与录像都走云台取景', async ({ page }) => 
   const panel = page.locator('section.panel', { has: page.getByText('云台与相机', { exact: true }) })
   await expect(panel).toBeVisible()
 
-  // —— 基准:机载视角画面 = 云台取景 ——
-  await panel.getByTestId('fpv-toggle').click()
-  await expect(panel.getByTestId('fpv-toggle')).toHaveText('退出机载视角')
-  await page.waitForTimeout(900)
-  const gimbalShot = await shotDataUrl(page)
-
-  // —— 切回观察者视角:这是用户实际在看、但**不该**被拍下来的画面 ——
-  await panel.getByTestId('fpv-toggle').click()
-  await expect(panel.getByTestId('fpv-toggle')).toHaveText('切到机载视角')
-  await page.waitForTimeout(900)
-  const observerShot = await shotDataUrl(page)
-
-  const diffViews = await imageDiff(page, gimbalShot, observerShot)
+  // —— 基准:机载视角画面 = 云台取景;观察者视角画面 = 用户在看、但不该被拍下来的那张 ——
+  // 两者必须明显不同,否则后面所有比对都没有意义,所以这一步先把它钉住
+  const { gimbalShot, observerShot, diff: diffViews } = await captureDistinctViews(page, panel)
   expect(diffViews, '前提:机载视角与观察者视角的画面必须明显不同').toBeGreaterThan(DIFFERENT_VIEW_MIN_DIFF)
 
   // —— 就在观察者视角下按快门 ——
