@@ -29,9 +29,11 @@ test.describe('项目文档页', () => {
     await expect(article).toContainText('最终模块边界总表')
     await expect(article).toContainText('92. 结论')
 
-    // README 的 92 章要一章不落地进目录 —— 漏一章是这一页最难发现的 bug
-    await expect(page.getByTestId('docs-nav').locator('.docs__link')).toHaveCount(92)
-    await expect(page.getByTestId('docs-nav').locator('.docs__group')).toHaveCount(6)
+    // README 的 92 章要一章不落地进目录 —— 漏一章是这一页最难发现的 bug;
+    // 另外文件头的「快速开始」也占一个入口,所以是 93 条链接 / 7 组
+    await expect(page.getByTestId('docs-nav').locator('.docs__link')).toHaveCount(93)
+    await expect(page.getByTestId('docs-nav').locator('.docs__group')).toHaveCount(7)
+    await expect(page.getByTestId('docs-link-快速开始')).toBeVisible()
 
     expect(errors).toEqual([])
   })
@@ -47,7 +49,7 @@ test.describe('项目文档页', () => {
     await expect(page.getByTestId('docs-link-81-内存稳定性')).toBeVisible()
 
     await page.getByTestId('docs-search').fill('')
-    await expect(links).toHaveCount(92)
+    await expect(links).toHaveCount(93)
   })
 
   test('跳到 README 末章:目录高亮跟着走', async ({ page }) => {

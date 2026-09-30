@@ -12,7 +12,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { GUIDE } from '../docs/guide'
-import { SPEC_CHAPTERS, SPEC_PARTS, SPEC_PRELUDE } from '../docs/spec'
+import { SPEC_CHAPTERS, SPEC_PARTS, SPEC_PRELUDE, SPEC_PRELUDE_SECTIONS } from '../docs/spec'
 
 type DocMode = 'guide' | 'spec'
 
@@ -45,11 +45,22 @@ const navGroups = computed<readonly NavGroup[]>(() => {
     ]
   }
 
-  return SPEC_PARTS.map((part) => ({
-    title: part.title,
-    note: part.note,
-    items: part.chapters.map((chapter) => ({ id: chapter.id, label: chapter.title })),
+  // 「快速开始」在 README 里排在编号章节之前,不是 §N,所以单独给一组;
+  // 页面上有正文、目录里却没有入口,是这一页最容易出现的不一致
+  const intro: NavGroup[] = SPEC_PRELUDE_SECTIONS.map((heading) => ({
+    title: heading.text,
+    note: '环境、安装与本地运行',
+    items: [{ id: heading.id, label: heading.text }],
   }))
+
+  return [
+    ...intro,
+    ...SPEC_PARTS.map((part) => ({
+      title: part.title,
+      note: part.note,
+      items: part.chapters.map((chapter) => ({ id: chapter.id, label: chapter.title })),
+    })),
+  ]
 })
 
 const filteredGroups = computed<readonly NavGroup[]>(() => {

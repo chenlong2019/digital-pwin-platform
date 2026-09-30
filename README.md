@@ -7,6 +7,72 @@
 
 ---
 
+# 快速开始
+
+## 环境要求
+
+| 项 | 要求 |
+| --- | --- |
+| Node.js | `^22.18.0` 或 `>=24.12.0`（见根 `package.json` 的 `engines`） |
+| npm | 随 Node 自带即可；仓库用 **npm workspaces**，不需要 pnpm / yarn |
+
+## 安装与启动
+
+```bash
+npm ci          # 严格按 package-lock.json 安装；没有锁文件时才用 npm install
+npm run dev     # 启动无人机沙盒，默认 http://localhost:5173
+```
+
+应用层直接消费 `packages/*` 的 **TypeScript 源码**（不做预构建），改包内源码即时热更。
+
+## 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `npm run dev` | 启动沙盒开发服务器 |
+| `npm run build` | 类型检查 + 生产构建，产物在 `apps/drone-simulator/dist` |
+| `npm run preview` | 预览生产构建 |
+| `npm run check:arch` | 只跑架构静态检查（§74） |
+| `npm run type-check` | 架构静态检查 + 全量类型检查 |
+| `npm run test:unit` | 单元测试（vitest，逐包执行） |
+| `npm run verify` | `type-check` + `build`，**提交前跑这一条** |
+| `npm run format` | Prettier 格式化 |
+
+端到端测试用 Playwright，首次需要先装浏览器：
+
+```bash
+npx playwright install chromium
+npm run test:unit -w @simulation/drone-simulator
+cd apps/drone-simulator && npx playwright test --project=chromium
+```
+
+## 仓库结构
+
+```text
+packages/                各层能力包，按六层架构分层（§40）
+  contracts/             契约层：中性数据结构与接口
+  simulation-core/       仿真时钟与固定步长循环
+  agent-core/            智能体基座与运行时
+  sandbox-core/          沙盒：世界、物理、障碍物、场景
+  drone-agent/           无人机领域智能体（DJI Mini 4 Pro）
+  task-core/             任务与航点
+  recorder/              事件 / 指令 / 快照记录
+  domain-api/            领域门面：外部唯一入口
+  three-adapter/         渲染适配层（three.js 隔离在此）
+apps/
+  drone-simulator/       唯一 UI 宿主：Vue 3 + Vite
+```
+
+## 页面入口
+
+| 路由 | 页面 |
+| --- | --- |
+| `/` | 无人机沙盒 |
+| `/flow` | 模块流程图与依赖关系 |
+| `/docs` | 项目文档：使用手册 + 本规范全文 |
+
+---
+
 # 1. 文档目的
 
 本文定义通用智能体仿真与数字孪生平台的整体技术架构。

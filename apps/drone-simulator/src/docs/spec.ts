@@ -96,4 +96,17 @@ export const SPEC_PARTS: readonly SpecPart[] = PARTS.map((part) => ({
 })).filter((part) => part.chapters.length > 0)
 
 /** README 文件头(平台名 + 一句定位),单独当「概述」放在正文最前面 */
-export const SPEC_PRELUDE = renderMarkdown(parsed.prelude.trim())
+const prelude = renderMarkdown(parsed.prelude.trim())
+
+export const SPEC_PRELUDE = prelude
+
+/**
+ * 文件头里的一级标题,去掉最开头那个文档标题。
+ *
+ * 「快速开始」写在编号章节**之前**,而不是编成 §1:它是给第一次拉仓库的人看的,
+ * 编进编号会把 92 章整体挤一位,而代码注释里到处引用 `§74`、`§42` 这类编号,
+ * 一失准就全篇对不上。所以它留在文件头,由侧栏单独给一个入口。
+ */
+export const SPEC_PRELUDE_SECTIONS: readonly DocHeading[] = prelude.headings
+  .filter((heading) => heading.level === 1)
+  .slice(1)
