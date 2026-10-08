@@ -11,3 +11,5 @@
  */
 export * from './data'
 export * from './controller'
+export * from './view'
+export * from './series'

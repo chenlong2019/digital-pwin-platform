@@ -90,6 +90,7 @@ const activeTab = ref<TabId>('flight')
       <div class="sandbox__run">
         <span class="hint">{{ runHint }}</span>
         <RouterLink class="sandbox__link" to="/car">汽车沙盒</RouterLink>
+        <RouterLink class="sandbox__link" to="/replay">飞行回放</RouterLink>
         <RouterLink class="sandbox__link" to="/flow">模块流程</RouterLink>
         <RouterLink class="sandbox__link" to="/docs">项目文档</RouterLink>
         <button class="primary" @click="toggleRun()">{{ runLabel }}</button>

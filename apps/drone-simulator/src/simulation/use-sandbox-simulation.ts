@@ -40,11 +40,13 @@ import type {
 import type { DroneSnapshot } from '@simulation/drone-agent'
 import { DRONE_COMMAND, readDroneTelemetry } from '@simulation/drone-agent'
 import { SimulationDomainAPI } from '@simulation/domain-api'
+import { captureReplayData } from '@simulation/replay'
 import type { Scenario } from '@simulation/sandbox-core'
 import { defaultScenario } from '@simulation/sandbox-core'
 import type { Waypoint } from '@simulation/task-core'
 import { defaultWaypoints } from '@simulation/task-core'
 import { scenarioToSceneObstacles } from './scene-mapping'
+import type { StoredReplay } from './replay-store'
 import type {
   RecordingResult,
   RendererInfo,
@@ -152,6 +154,15 @@ export interface SandboxSimulation extends SimulationSessionView {
 
   setWind(speed: number, directionDeg: number): void
   setWeather(weather: WeatherKind): void
+
+  /**
+   * 把当前这次飞行抓成一份可回放的快照(§22)。
+   *
+   * 抓下来的是**独立数据** —— 之后清空记录器、关掉会话都不影响回放。
+   * 顺带带上场景与任务结论:回放要用场景重建障碍物(否则无人机像在空地上飞),
+   * 用任务结论生成复盘报告;没跑过任务时那两项是 null,看板退化成轨迹统计。
+   */
+  captureReplaySession(): StoredReplay
 
   setCameraMode(mode: CameraMode): void
   resetCamera(): void
@@ -468,6 +479,18 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     session.setWeather(weather)
   }
 
+  // ————————————————————————————— 回放 —————————————————————————————
+
+  function captureReplaySession(): StoredReplay {
+    return {
+      data: captureReplayData(session),
+      scenario,
+      task: task.value,
+      taskResult: taskResult.value,
+      savedAt: Date.now(),
+    }
+  }
+
   // ————————————————————————————— 视图 —————————————————————————————
 
   function applyViewOptions(): void {
@@ -659,6 +682,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
 
     setWind,
     setWeather,
+    captureReplaySession,
 
     setCameraMode,
     resetCamera,

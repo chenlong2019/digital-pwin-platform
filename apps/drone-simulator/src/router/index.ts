@@ -20,6 +20,13 @@ const router = createRouter({
       meta: { title: '汽车沙盒' },
     },
     {
+      path: '/replay',
+      name: 'replay',
+      // 回放页不跑仿真,只消费记录数据;按需加载,沙盒首屏不该为它买单
+      component: () => import('../views/ReplayView.vue'),
+      meta: { title: '飞行回放' },
+    },
+    {
       path: '/flow',
       name: 'flow',
       // 架构图是文档页,跟仿真无关,所以按需加载 —— 沙盒首屏不该为它买单

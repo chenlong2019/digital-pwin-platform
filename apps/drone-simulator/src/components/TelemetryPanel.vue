@@ -6,8 +6,10 @@
  * 也就是「Agent State 的对外视图」——面板读不到内部 State,也就没有机会偷偷改它。
  */
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import type { DroneSnapshot } from '@simulation/drone-agent'
 import { useSandbox } from '../simulation/injection'
+import { useReplayStore } from '../simulation/replay-store'
 import {
   compassLabel,
   formatClock,
@@ -20,7 +22,24 @@ import {
   formatVolts,
 } from '../utils/format'
 
-const { telemetry, task } = useSandbox()
+const { telemetry, task, metrics, captureReplaySession } = useSandbox()
+
+const router = useRouter()
+const { saveReplay } = useReplayStore()
+
+/** 至少要有一个采样点才有得放 —— 空记录放出来是一片黑,不如先在面板上说清楚 */
+const canSaveReplay = computed(() => metrics.value.trackPoints > 0)
+
+/**
+ * 保存并跳去回放页。
+ *
+ * 存的是**抓好的副本**:之后清空记录器、关掉页面都不影响回放(§22)。
+ * 跳转前先落库,所以回放页一挂载就有数据,不需要它反过来问沙盒要。
+ */
+function saveAndReplay(): void {
+  saveReplay(captureReplaySession())
+  void router.push({ name: 'replay' })
+}
 
 const batteryTone = computed(() => {
   const value = telemetry.value?.batteryPercent ?? 100
@@ -152,6 +171,24 @@ const checklistBlocked = computed(() => checklist.value.some((item) => item.bloc
             <span>{{ task.progress.stage }}</span>
             <span class="mono">{{ task.progress.completed }} / {{ task.progress.total }}</span>
           </div>
+        </div>
+
+        <!-- 复盘入口:把这一趟抓成独立数据送去回放页 -->
+        <div class="block">
+          <div class="row row--between">
+            <span class="field-label">飞行记录</span>
+            <span class="mono">{{ metrics.trackPoints }} 点</span>
+          </div>
+          <button
+            class="primary"
+            type="button"
+            data-testid="save-replay"
+            :disabled="!canSaveReplay"
+            @click="saveAndReplay"
+          >
+            保存本次飞行 → 回放
+          </button>
+          <p class="hint">抓的是记录器里的轨迹与事件副本,之后清空记录、关掉页面都不影响回放。</p>
         </div>
       </template>
     </div>
