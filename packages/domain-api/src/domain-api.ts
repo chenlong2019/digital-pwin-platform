@@ -18,6 +18,7 @@ import type {
   Agent,
   AgentId,
   AgentSnapshot,
+  AgentType,
   AgentViewProjector,
   Command,
   EventLevel,
@@ -35,12 +36,19 @@ import { PLATFORM_COMMAND, createCommand } from '@simulation/contracts'
 import type { RuntimeStats } from '@simulation/simulation-core'
 import { SimulationRuntime } from '@simulation/simulation-core'
 import { AgentRegistry } from '@simulation/agent-core'
-import type { ObstacleDefinition, Scenario } from '@simulation/sandbox-core'
+import type { AgentSeed, ObstacleDefinition, Scenario } from '@simulation/sandbox-core'
 import { StaticSandbox, createSandboxFromScenario, defaultScenario } from '@simulation/sandbox-core'
 import type { Waypoint } from '@simulation/task-core'
 import { WaypointTask, defaultWaypoints } from '@simulation/task-core'
 import type { DroneAgentOptions, DroneSnapshot } from '@simulation/drone-agent'
 import { DroneAgent, harvestDroneEvents, projectDroneRenderView, readDroneTelemetry } from '@simulation/drone-agent'
+import type { VehicleAgentOptions, VehicleSnapshot } from '@simulation/vehicle-agent'
+import {
+  VehicleAgent,
+  harvestVehicleEvents,
+  projectVehicleRenderView,
+  readVehicleTelemetry,
+} from '@simulation/vehicle-agent'
 import type { AgentTrack, RecorderStats } from '@simulation/recorder'
 import { SimulationRecorder } from '@simulation/recorder'
 
@@ -79,6 +87,67 @@ export const defaultAuthorityPolicy: AuthorityPolicy = (request) => {
   return { allowed: true, reason: '' }
 }
 
+// ————————————————————————————— 领域装配 —————————————————————————————
+
+/**
+ * 领域装配 —— 「这个会话跑哪种载体」的全部差异都收在这一个对象里。
+ *
+ * 之所以要这层:在此之前 SimulationDomainAPI 直接写死 `new DroneAgent` 与
+ * `projectDroneRenderView`,于是平台虽然契约上支持 vehicle / boat / robot,
+ * 运行时却只能跑无人机 —— 应用层想换载具无处可换。
+ *
+ * 有了 binding,加船/机器人 = 再写一个 binding,本文件一行都不用改;
+ * 而会话本身的 Runtime / Recorder / Authority / Sandbox 那套机制完全复用。
+ */
+export interface DomainBinding {
+  /** 本装配负责的载具类型 */
+  readonly kind: AgentType
+  /** 按场景里的 agent seed 建 Agent;不认领的 seed 返回 null(一个场景可以混编) */
+  createAgent(seed: AgentSeed, options: SimulationSessionOptions): Agent | null
+  /** AgentSnapshot → AgentRenderView,由领域包提供 */
+  readonly projector: AgentViewProjector
+  /** 从快照里收割领域事件 */
+  readonly harvestEvents: (snapshot: SimulationSnapshot) => ReadonlyArray<SimEvent>
+}
+
+const droneBinding: DomainBinding = {
+  kind: 'drone',
+  createAgent: (seed, options) => {
+    if (seed.kind !== 'drone') return null
+    return new DroneAgent({
+      ...options.drone,
+      id: seed.id,
+      label: seed.label ?? options.drone?.label,
+      origin: { x: seed.x ?? 0, y: seed.y ?? 0, z: seed.z ?? 0 },
+      headingDeg: seed.headingDeg ?? 0,
+    })
+  },
+  projector: projectDroneRenderView,
+  harvestEvents: harvestDroneEvents,
+}
+
+const vehicleBinding: DomainBinding = {
+  kind: 'vehicle',
+  createAgent: (seed, options) => {
+    if (seed.kind !== 'vehicle') return null
+    return new VehicleAgent({
+      ...options.vehicle,
+      id: seed.id,
+      label: seed.label ?? options.vehicle?.label,
+      origin: { x: seed.x ?? 0, y: seed.y ?? 0, z: seed.z ?? 0 },
+      headingDeg: seed.headingDeg ?? 0,
+    })
+  },
+  projector: projectVehicleRenderView,
+  harvestEvents: harvestVehicleEvents,
+}
+
+/** 内置装配表 —— 应用层按场景 id 或用户选择挑一个 */
+export const DOMAIN_BINDINGS = {
+  drone: droneBinding,
+  vehicle: vehicleBinding,
+} as const
+
 // ————————————————————————————— 会话配置 —————————————————————————————
 
 export interface SimulationSessionOptions {
@@ -89,6 +158,13 @@ export interface SimulationSessionOptions {
   readonly timeScale?: number
   /** 无人机初始参数(出厂机臂收纳等);会被 Scenario 的出生点覆盖 */
   readonly drone?: Partial<DroneAgentOptions>
+  /** 汽车初始参数;同样会被 Scenario 的出生点覆盖 */
+  readonly vehicle?: Partial<VehicleAgentOptions>
+  /**
+   * 领域装配 —— 决定这个会话跑哪种载体。
+   * 不传 = 无人机(保持既有调用方行为不变);跑汽车传 `DOMAIN_BINDINGS.vehicle`。
+   */
+  readonly domain?: DomainBinding
   readonly authority?: AuthorityPolicy
   /** AgentTrack 采样率,默认 20 Hz */
   readonly sampleHz?: number
@@ -127,6 +203,7 @@ export class SimulationDomainAPI {
   readonly agents = new AgentRegistry()
 
   private readonly authority: AuthorityPolicy
+  private readonly binding: DomainBinding
   private readonly detachRecorder: () => void
 
   constructor(options: SimulationSessionOptions = {}) {
@@ -151,22 +228,17 @@ export class SimulationDomainAPI {
       timeScale: options.timeScale,
     })
 
+    // 载具类型在此分岔:同一个 Session 机制,不同的领域装配
+    this.binding = options.domain ?? droneBinding
     for (const seed of scenario.agents) {
-      if (seed.kind !== 'drone') continue
-      const agent = new DroneAgent({
-        ...options.drone,
-        id: seed.id,
-        label: seed.label ?? options.drone?.label,
-        origin: { x: seed.x ?? 0, y: seed.y ?? 0, z: seed.z ?? 0 },
-        headingDeg: seed.headingDeg ?? 0,
-      })
-      this.registerAgent(agent)
+      const agent = this.binding.createAgent(seed, options)
+      if (agent) this.registerAgent(agent)
     }
 
     this.authority = options.authority ?? defaultAuthorityPolicy
     this.recorder = new SimulationRecorder({
       sampleHz: options.sampleHz,
-      harvestEvents: harvestDroneEvents,
+      harvestEvents: this.binding.harvestEvents,
     })
     this.detachRecorder = this.recorder.attach({
       snapshots: this.runtime.snapshots,
@@ -179,7 +251,12 @@ export class SimulationDomainAPI {
 
   /** 渲染投影函数由领域包提供,应用层直接把它交给渲染适配器 */
   get projector(): AgentViewProjector {
-    return projectDroneRenderView
+    return this.binding.projector
+  }
+
+  /** 当前会话的载具类型 —— 应用层据此决定加载哪个机体视图与哪套 HUD */
+  get agentKind(): AgentType {
+    return this.binding.kind
   }
 
   get obstacles(): ReadonlyArray<ObstacleDefinition> {
@@ -268,12 +345,30 @@ export class SimulationDomainAPI {
     return readDroneTelemetry(this.runtime.getAgentSnapshot(target))
   }
 
+  /** 便捷入口:读车辆遥测(领域收窄在 vehicle-agent 里完成) */
+  getVehicleTelemetry(id?: AgentId): VehicleSnapshot | undefined {
+    const target = id ?? this.primaryAgentId('vehicle')
+    if (target === undefined) return undefined
+    return readVehicleTelemetry(this.runtime.getAgentSnapshot(target))
+  }
+
   getAgentTrack(id: AgentId): AgentTrack | undefined {
     return this.recorder.getTrack(id)
   }
 
+  /** 取会话里第一个指定类型的 Agent;不传类型则取第一个注册的 */
+  primaryAgentId(type?: AgentType): AgentId | undefined {
+    const list = this.agents.list()
+    if (type === undefined) return list[0]?.id
+    return list.find((agent) => agent.type === type)?.id
+  }
+
   primaryDroneId(): AgentId | undefined {
-    return this.agents.list().find((agent) => agent.type === 'drone')?.id
+    return this.primaryAgentId('drone')
+  }
+
+  primaryVehicleId(): AgentId | undefined {
+    return this.primaryAgentId('vehicle')
   }
 
   // ————————————————————————————— Command —————————————————————————————
@@ -399,6 +494,11 @@ export class SimulationDomainAPI {
 /** 一步到位:用默认场景建一个无人机测试沙盒会话 */
 export function createDroneSandboxSession(options: SimulationSessionOptions = {}): SimulationDomainAPI {
   return new SimulationDomainAPI(options)
+}
+
+/** 一步到位:建一个轮式载具沙盒会话 */
+export function createVehicleSandboxSession(options: SimulationSessionOptions = {}): SimulationDomainAPI {
+  return new SimulationDomainAPI({ ...options, domain: vehicleBinding })
 }
 
 export type { SessionId }

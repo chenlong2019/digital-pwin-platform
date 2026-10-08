@@ -56,7 +56,16 @@ const MANIFEST = {
 
   'domain-api': {
     layer: 'API',
-    allow: ['contracts', 'simulation-core', 'agent-core', 'sandbox-core', 'task-core', 'recorder', 'drone-agent'],
+    allow: [
+      'contracts',
+      'simulation-core',
+      'agent-core',
+      'sandbox-core',
+      'task-core',
+      'recorder',
+      'drone-agent',
+      'vehicle-agent',
+    ],
     dir: 'packages/domain-api',
   },
 

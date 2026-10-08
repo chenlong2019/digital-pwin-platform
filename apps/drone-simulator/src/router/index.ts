@@ -12,6 +12,14 @@ const router = createRouter({
       meta: { title: '无人机沙盒' },
     },
     {
+      path: '/car',
+      name: 'vehicle',
+      // 汽车场景与无人机场景共用同一套内核,但机体 / 领域装配 / HUD 完全不同,
+      // 所以按需加载 —— 无人机首屏不必为汽车的模型与面板买单
+      component: () => import('../views/VehicleView.vue'),
+      meta: { title: '汽车沙盒' },
+    },
+    {
       path: '/flow',
       name: 'flow',
       // 架构图是文档页,跟仿真无关,所以按需加载 —— 沙盒首屏不该为它买单

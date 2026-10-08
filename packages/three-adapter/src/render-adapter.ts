@@ -29,6 +29,7 @@ import type {
   SimulationSnapshot,
 } from '@simulation/contracts'
 import type { RigPartReport } from './drone-rig'
+import type { BodyView, BodyViewFactory } from './body-view'
 import type { DroneLightsSnapshot, StatusLightKey } from './drone-lights'
 import type { BatteryLightMode, AuxLightMode } from './drone-lights'
 import type { RadarAim, RadarSnapshot } from './drone-radar'
@@ -42,6 +43,15 @@ export interface ThreeRenderAdapterOptions {
   readonly container: HTMLElement
   /** 应用层注入:把通用 AgentSnapshot 投影成渲染视图 */
   readonly project: AgentViewProjector
+  /**
+   * 机体可视化工厂 —— **换载具的唯一开关**。
+   *
+   * 不传 = 默认无人机(保持既有行为不变);要跑汽车就在应用层传
+   * `(context) => CarView.load({ ...context, url: CAR_MODEL_URL })`。
+   * 适配器只认 BodyView 契约,不认识 DroneView / CarView 任何一个具体实现,
+   * 所以加船、加机器人时这里一行都不用改。
+   */
+  readonly body?: BodyViewFactory
   readonly model?: DroneViewOptions
   readonly obstacles?: ReadonlyArray<SceneObstacle>
   readonly background?: string
@@ -54,6 +64,12 @@ export class ThreeRenderAdapter implements RenderAdapter {
   private readonly views = new Map<AgentId, AgentRenderView>()
   private readonly gimbalScratch = new THREE.Object3D()
   private sandboxScene: SandboxScene | null = null
+  /** 当前机体 —— 载体无关,只认 BodyView 契约 */
+  private body: BodyView | null = null
+  /**
+   * 只有机体是无人机时才有值。雷达 / 云台 / 灯光这些**无人机专属能力**全部经它转发,
+   * 汽车时它为 null,相关方法自然降级成空返回,不需要在适配器里写 if (是汽车)。
+   */
   private drone: DroneView | null = null
   private radar: DroneRadar | null = null
   private environment: EnvironmentSnapshot | null = null
@@ -67,11 +83,16 @@ export class ThreeRenderAdapter implements RenderAdapter {
   }
 
   get isReady(): boolean {
-    return this.sandboxScene !== null && this.drone !== null
+    return this.sandboxScene !== null && this.body !== null
   }
 
   get error(): unknown {
     return this.loadError
+  }
+
+  /** 当前机体是不是无人机 —— 应用层据此决定雷达/云台面板显不显示 */
+  get hasDroneBody(): boolean {
+    return this.drone !== null
   }
 
   get scene(): SandboxScene | null {
@@ -97,21 +118,31 @@ export class ThreeRenderAdapter implements RenderAdapter {
     scene.resetCamera(target?.x ?? 0, target?.y ?? 1.2, target?.z ?? 0)
 
     try {
-      const drone = await DroneView.load(this.loader, scene.scene, this.options.model ?? {})
-      this.drone = drone
-      scene.scene.add(drone.model)
+      const body = await this.loadBody(scene)
+      this.body = body
+      scene.scene.add(body.object3d)
       scene.setHome(0, 0)
 
-      // 前视测距雷达:起点/方向取自模型自带的前向视觉玻璃节点,上电后工作
-      const radar = new DroneRadar(scene.scene)
-      radar.bindSensors(drone.model)
-      radar.setVisible(this.radarBeamsVisible)
-      this.radar = radar
+      // 前视测距雷达是无人机专属能力:换载具后自动不创建,适配器其余部分照常工作
+      if (body instanceof DroneView) {
+        this.drone = body
+        const radar = new DroneRadar(scene.scene)
+        radar.bindSensors(body.model)
+        radar.setVisible(this.radarBeamsVisible)
+        this.radar = radar
+      }
     } catch (error) {
       // 模型载不进来也不该让整个沙盒挂掉:场景仍可交互,只报错
       this.loadError = error
-      console.error('[three-adapter] 无人机模型载入失败,场景继续可用', error)
+      console.error('[three-adapter] 机体模型载入失败,场景继续可用', error)
     }
+  }
+
+  /** 没注入工厂就退回无人机 —— 保证既有调用方的行为一字不变 */
+  private loadBody(scene: SandboxScene): Promise<BodyView> {
+    const factory = this.options.body
+    if (factory) return factory({ loader: this.loader, scene: scene.scene })
+    return DroneView.load(this.loader, scene.scene, this.options.model ?? {})
   }
 
   updateSnapshot(snapshot: SimulationSnapshot): void {
@@ -133,9 +164,9 @@ export class ThreeRenderAdapter implements RenderAdapter {
 
     const view = this.primaryView()
     if (view) {
-      this.drone?.apply(view, deltaSeconds)
+      this.body?.apply(view, deltaSeconds)
       scene.setShadowFocus(view.pose.x, view.pose.z)
-      scene.pushTrail(view.pose.x, (this.drone?.groundOffsetY ?? 0) + view.pose.y, view.pose.z)
+      scene.pushTrail(view.pose.x, (this.body?.groundOffsetY ?? 0) + view.pose.y, view.pose.z)
     }
 
     // 测距雷达:视场随机体姿态转动,读数是「传感器测量」,与飞控避障互不影响
@@ -149,7 +180,7 @@ export class ThreeRenderAdapter implements RenderAdapter {
     const gimbalReady = this.drone?.getGimbalTransform(this.gimbalScratch) === true
     scene.updateCamera({
       x: view?.pose.x ?? 0,
-      y: (this.drone?.groundOffsetY ?? 0) + (view?.pose.y ?? 0),
+      y: (this.body?.groundOffsetY ?? 0) + (view?.pose.y ?? 0),
       z: view?.pose.z ?? 0,
       headingDeg: view?.pose.headingDeg ?? 0,
       deltaSeconds,
@@ -183,7 +214,7 @@ export class ThreeRenderAdapter implements RenderAdapter {
     const view = this.primaryView()
     this.sandboxScene?.resetCamera(
       view?.pose.x ?? 0,
-      (this.drone?.groundOffsetY ?? 0) + (view?.pose.y ?? 0),
+      (this.body?.groundOffsetY ?? 0) + (view?.pose.y ?? 0),
       view?.pose.z ?? 0,
     )
   }
@@ -296,17 +327,18 @@ export class ThreeRenderAdapter implements RenderAdapter {
   // ————————————————————————————— 模型自检 —————————————————————————————
 
   getRigReport(): ReadonlyArray<RigPartReport> {
-    return this.drone?.getRigReport() ?? []
+    return this.body?.getPartReport() ?? []
   }
 
   get modelHealthText(): string {
-    return this.drone?.modelHealthText ?? '模型尚未载入'
+    return this.body?.modelHealthText ?? '模型尚未载入'
   }
 
   dispose(): void {
     this.radar?.destroy()
     this.radar = null
-    this.drone?.dispose()
+    this.body?.dispose()
+    this.body = null
     this.drone = null
     this.sandboxScene?.dispose()
     this.sandboxScene = null

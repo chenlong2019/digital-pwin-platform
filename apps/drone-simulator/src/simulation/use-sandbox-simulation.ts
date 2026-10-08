@@ -45,6 +45,13 @@ import { defaultScenario } from '@simulation/sandbox-core'
 import type { Waypoint } from '@simulation/task-core'
 import { defaultWaypoints } from '@simulation/task-core'
 import { scenarioToSceneObstacles } from './scene-mapping'
+import type {
+  RecordingResult,
+  RendererInfo,
+  SandboxMetrics,
+  SandboxRenderer,
+  SimulationSessionView,
+} from './session-types'
 
 /** HUD 刷新间隔(秒)—— 仿真跑 60 Hz,界面没必要 */
 const HUD_REFRESH_SECONDS = 0.1
@@ -53,69 +60,16 @@ const MAX_FRAME_DELTA = 0.25
 /** 界面保留的日志条数 */
 const LOG_WINDOW = 120
 
-export interface SandboxMetrics {
-  readonly status: RuntimeStatus
-  readonly tick: number
-  readonly simulationTime: number
-  readonly realTime: number
-  readonly fps: number
-  /** 本帧执行的固定步数,正常应是 1(60 Hz 固定步长下的理想值) */
-  readonly stepsPerFrame: number
-  /** 因为掉帧被丢弃的步数(README §75 要求这个值长期为 0) */
-  readonly droppedSteps: number
-  readonly timeScale: number
-  readonly agents: number
-  readonly tasks: number
-  readonly eventsEmitted: number
-  readonly trackPoints: number
-}
-
-export type RendererState = 'loading' | 'ready' | 'error'
-
-export interface RendererInfo {
-  readonly state: RendererState
-  readonly modelHealth: string
-  readonly parts: ReadonlyArray<RigPartReport>
-}
-
-/**
- * 视口注册进来的渲染器。契约方法之外,three-adapter 的扩展能力一律用**可选方法**描述,
- * 这样本文件不需要认识 three,换成 Cesium 适配器时这段代码一个字都不用改。
- */
-export interface SandboxRenderer {
-  readonly isReady?: boolean
-  readonly modelHealthText?: string
-  updateSnapshot(snapshot: SimulationSnapshot): void
-  render(deltaSeconds: number): void
-  dispose(): void
-  setCameraMode?(mode: CameraMode): void
-  resetCamera?(): void
-  clearTrail?(): void
-  setObstaclesVisible?(visible: boolean): void
-  setAxesVisible?(visible: boolean): void
-  getRigReport?(): ReadonlyArray<RigPartReport>
-  // —— 挂载在机体上的传感器与灯光(可选能力;换成 Cesium 适配器时可以没有) ——
-  getRadarSnapshot?(): RadarSnapshot
-  setRadarAim?(aim: RadarAim): void
-  setRadarBeamsVisible?(visible: boolean): void
-  getLightsSnapshot?(): DroneLightsSnapshot | null
-  setStatusLightOverride?(key: StatusLightKey | null): void
-  setBatteryLightMode?(mode: BatteryLightMode): void
-  setAuxLightMode?(mode: AuxLightMode): void
-  setAuxBeamVisible?(visible: boolean): void
-  // —— 相机(云台取景) ——
-  requestPhoto?(): Promise<PhotoShot | null>
-  readonly isRecording?: boolean
-  startRecording?(): boolean
-  stopRecording?(): Promise<Blob | null>
-}
-
-/** 录像成片:由应用层交给界面落盘(渲染层不直接触发下载) */
-export interface RecordingResult {
-  readonly blob: Blob
-  /** 录像时长(秒),取自仿真侧的计时 */
-  readonly seconds: number
-}
+// 通用会话类型(SandboxMetrics / RendererInfo / SandboxRenderer / RecordingResult)
+// 已抽到 session-types.ts:无人机会话与汽车会话共用同一份,视口组件因此零改动复用。
+export type {
+  RecordingResult,
+  RendererInfo,
+  RendererState,
+  SandboxMetrics,
+  SandboxRenderer,
+  SimulationSessionView,
+} from './session-types'
 
 export interface UseSandboxSimulationOptions {
   readonly scenario?: Scenario
@@ -125,7 +79,7 @@ export interface UseSandboxSimulationOptions {
   readonly timeScale?: number
 }
 
-export interface SandboxSimulation {
+export interface SandboxSimulation extends SimulationSessionView {
   readonly scenario: Scenario
   readonly sessionLabel: string
   readonly droneId: AgentId

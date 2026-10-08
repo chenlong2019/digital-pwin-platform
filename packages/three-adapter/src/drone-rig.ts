@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { BodyPartReport } from './body-view'
 
 /**
  * 无人机模型的机械驱动。
@@ -51,13 +52,11 @@ export const GIMBAL_LIMITS = {
 } as const
 
 /** 模型自检结果(测试沙盒里逐项显示) */
-export interface RigPartReport {
-  id: string
-  label: string
-  found: boolean
-  /** 该部件是否可被驱动 */
-  drivable: boolean
-}
+/**
+ * 部件自检报告 —— 用的是 BodyView 契约里的统一结构,无人机与汽车同一份。
+ * 早先这里自己定义了一份同形 interface,两个载体的「模型健康」面板因此要写两遍。
+ */
+export type RigPartReport = BodyPartReport
 
 /** 单片桨叶:折叠 = 绕电机轴(自转局部 Y)偏航叠拢到机臂方向 */
 interface BladeUnit {

@@ -12,7 +12,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { CameraMode } from '@simulation/three-adapter'
 import { CAMERA_MODE_LIST, ThreeRenderAdapter } from '@simulation/three-adapter'
-import { useSandbox } from '../simulation/injection'
+import { useSession } from '../simulation/injection'
 import { formatSimulationClock } from '../utils/format'
 
 const {
@@ -21,12 +21,14 @@ const {
   scenario,
   projector,
   obstacles,
+  bodyFactory,
+  cameraTarget,
   cameraMode,
   attachRenderer,
   refreshRendererInfo,
   notifyRendererError,
   setCameraMode,
-} = useSandbox()
+} = useSession()
 
 const container = ref<HTMLDivElement | null>(null)
 let adapter: ThreeRenderAdapter | null = null
@@ -58,8 +60,10 @@ async function mountRenderer(): Promise<void> {
     container: host,
     // 领域包提供的投影函数:适配器因此完全不需要认识无人机遥测
     project: projector,
+    // 会话若指定了机体工厂(比如汽车),视口原样转交 —— 它对载具一无所知
+    body: bodyFactory,
     obstacles,
-    initialCameraTarget: { x: 0, y: 1.2, z: 0 },
+    initialCameraTarget: cameraTarget ?? { x: 0, y: 1.2, z: 0 },
   })
   adapter = next
   attachRenderer(next)

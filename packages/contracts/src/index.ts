@@ -397,6 +397,23 @@ export interface AgentBodyPose {
   readonly rollDeg: number
 }
 
+/**
+ * 载体自定义的可动件通道 —— 键为部件名,值为该部件的连续状态。
+ *
+ * 上面那几个字段(armFold / gimbal*)是无人机专属的固定字段,属于历史包袱;
+ * **新增载体一律走这里**,渲染层按名字驱动对应节点,契约层就不必再为每种载体
+ * 长出新字段(否则每加一种载具都要改契约,契约层会被领域细节撑爆):
+ *
+ *   汽车: door_FL / door_FR / door_RL / door_RR  0~1 关闭~全开
+ *         mirror_L / mirror_R                    0~1 展开~折叠
+ *         steer                                  前轮转角(度,左正右负)
+ *         wheelSpin                              车轮自转累计角(度)
+ *         trunk                                  后备厢 0~1
+ *
+ * 数值标度由领域包声明;渲染层不认识名字时按「忽略」处理,不会崩。
+ */
+export type AgentPartChannel = Readonly<Record<string, number>>
+
 /** 机械/外观状态,可选;不适用的 Agent 传 null */
 export interface AgentRigState {
   /** 动力负荷 0~1 */
@@ -413,6 +430,8 @@ export interface AgentRigState {
    * 不该被设备变焦顶掉,两者的保存与归还在渲染适配器内部处理。
    */
   readonly cameraZoom: number
+  /** 载体自定义可动件通道(见 AgentPartChannel);无人机不用它 */
+  readonly parts?: AgentPartChannel
 }
 
 /**

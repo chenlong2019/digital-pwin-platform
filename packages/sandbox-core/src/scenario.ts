@@ -98,3 +98,34 @@ export function defaultScenario(): Scenario {
     tasks: [],
   }
 }
+
+/**
+ * 轮式载具测试场景 —— 开阔场地 + 一个车库 + 两组锥桶。
+ *
+ * 与无人机场景用的是**同一套** Sandbox / Runtime / Recorder 机制,连障碍物结构
+ * (ObstacleDefinition)都完全一致,唯一差别是 agents 里的 kind 换成了 'vehicle' ——
+ * 由领域装配(DomainBinding)解释成 VehicleAgent。这正是「换载具不改内核」的落点。
+ *
+ * 障碍物刻意摆成"能绕开、撞得上":车库给个实体参照物验证避障停车,
+ * 两组锥桶分列左右,测转向时一眼能看出前轮往哪偏。
+ */
+export function vehicleScenario(): Scenario {
+  return {
+    id: 'vehicle-test-sandbox',
+    label: '汽车测试沙盒',
+    description: '开阔铺装场地 + 车库 + 两组锥桶,适合验证四门开合、四轮转动、前轮转向与灯光',
+    seed: 20261008,
+    wind: { speed: 0, directionDeg: 0 },
+    weather: 'clear',
+    timeOfDay: 14,
+    geofence: { minX: -200, maxX: 200, minZ: -200, maxZ: 200, maxAltitude: 200 },
+    obstacles: [
+      { name: 'GARAGE', label: '车库', x: 0, z: -38, width: 14, depth: 10, height: 5.5, color: 0x35404a },
+      { name: 'PYLON_A', label: '锥桶 A', x: 16, z: 6, width: 1.2, depth: 1.2, height: 0.9, color: 0xd85a30 },
+      { name: 'PYLON_B', label: '锥桶 B', x: -16, z: 6, width: 1.2, depth: 1.2, height: 0.9, color: 0xd85a30 },
+      { name: 'PYLON_C', label: '锥桶 C', x: 0, z: 22, width: 1.2, depth: 1.2, height: 0.9, color: 0xd85a30 },
+    ],
+    agents: [{ kind: 'vehicle', id: 'vehicle-01', label: 'Model 3', x: 0, y: 0, z: 0, headingDeg: 0 }],
+    tasks: [],
+  }
+}

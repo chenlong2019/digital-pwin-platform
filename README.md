@@ -20,7 +20,9 @@
 
 ```bash
 npm ci          # 严格按 package-lock.json 安装；没有锁文件时才用 npm install
-npm run dev     # 启动无人机沙盒，默认 http://localhost:5173
+npm run dev     # 启动沙盒，默认 http://localhost:5173
+                #   /     无人机沙盒
+                #   /car  汽车沙盒
 ```
 
 应用层直接消费 `packages/*` 的 **TypeScript 源码**（不做预构建），改包内源码即时热更。
@@ -55,6 +57,7 @@ packages/                各层能力包，按六层架构分层（§40）
   agent-core/            智能体基座与运行时
   sandbox-core/          沙盒：世界、物理、障碍物、场景
   drone-agent/           无人机领域智能体（DJI Mini 4 Pro）
+  vehicle-agent/         轮式载具领域智能体（自行车模型 / 挡位 / 车门车灯）
   task-core/             任务与航点
   recorder/              事件 / 指令 / 快照记录
   result/                任务结果聚合：TaskResult / 统计 / 导出
@@ -71,6 +74,7 @@ apps/
 | 路由 | 页面 |
 | --- | --- |
 | `/` | 无人机沙盒 |
+| `/car` | 汽车沙盒（同一套内核的第二个载体） |
 | `/flow` | 模块流程图与依赖关系 |
 | `/docs` | 项目文档：使用手册 + 本规范全文 |
 
@@ -83,13 +87,13 @@ apps/
 （`src/__tests__/docs.spec.ts`）与架构守卫的包清单互相钉住：这里写「已落地」
 而目录不存在、或写「未实现」而目录已经出现，测试都会红。
 
-## 已落地（13 个包 + 1 个应用）
+## 已落地（14 个包 + 1 个应用）
 
 | 层 | 模块 |
 | --- | --- |
 | Core | `contracts` `simulation-core` `agent-core` `sandbox-core` |
 | Capability | `task-core` `recorder` `result` `replay` `input` |
-| Domain | `drone-agent` |
+| Domain | `drone-agent` `vehicle-agent` |
 | API | `domain-api` |
 | Adapter | `three-adapter` |
 | Application | `drone-simulator` |
@@ -99,7 +103,7 @@ apps/
 | 层 | 模块 |
 | --- | --- |
 | Capability | `collaboration` `realtime` |
-| Domain | `vehicle-agent` `boat-agent` `robot-agent` |
+| Domain | `boat-agent` `robot-agent` |
 | Adapter | `cesium-adapter` `device-adapters` |
 | Integration | `mcp-server` |
 | Application | `vehicle-simulator` `robot-simulator` |
@@ -115,6 +119,26 @@ apps/
 | §77 Recorder（Event 不丢失 / Command 可追踪 / Track 完整 / 时间戳连续） | 已落地 | 同上 |
 | §77 Replay（与记录状态容差内一致） | 已落地 | 同上 + `src/__tests__/result-replay.spec.ts` |
 | §74 架构静态检查（依赖方向 / 循环依赖 / 隔离） | 已落地 | `npm run check:arch` |
+| 载体可插拔（同一套内核跑无人机与汽车） | 已落地 | `src/__tests__/vehicle.spec.ts` + `e2e/vehicle.spec.ts` |
+
+## 载体是可插拔的：同一套内核跑无人机与汽车
+
+`/` 与 `/car` 共用**同一个** `SimulationDomainAPI`、`SimulationRuntime`、`Sandbox`、
+`Recorder`、`ThreeRenderAdapter` —— 内核那一层完全没有分叉。换载体只发生在三处接缝，
+每一处都收在一个契约后面（§64 投影函数注入的延伸）：
+
+| 接缝 | 无人机 | 汽车 | 契约 |
+| --- | --- | --- | --- |
+| 领域装配 | `droneBinding` | `vehicleBinding` | `DomainBinding`（`createAgent` / `projector` / `harvestEvents`） |
+| 机体可视化 | `DroneView` | `CarView` | `BodyView`（`apply` / `getPartReport` / `dispose`） |
+| 载具可动件 | 机臂 / 云台 / 桨叶 | 车门 / 后视镜 / 前轮 | `AgentPartChannel`（`Record<string, number>`） |
+
+三处之外没有任何 `if (是汽车)`：适配器不认识载体（只认 `BodyView`），
+`RenderAdapter` 只吃中性的 `AgentRenderView`，输入层与内核也不知道谁在用。
+载具专属能力（雷达、云台取景）以 `body instanceof DroneView` 为界自动降级成空返回。
+
+因此再加一种载具 = 加一个领域包 + 一个 `DomainBinding` + 一个 `BodyView` 实现 + 一条路由，
+不需要动内核、适配器与既有测试。
 | §75 启动性能 / 渲染帧率 / 输入延迟 | 待补 | 需要真机基准与渲染计时采样 |
 | §78–§86 多人协同 / 内存 / 兼容性 / 安全 / 包迁移 | 待补 | 依赖未实现的模块 |
 

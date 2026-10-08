@@ -1,0 +1,18 @@
+{
+  "name": "@simulation/vehicle-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "轮式载具领域包:自行车模型运动学 / 四门四轮后视镜灯光 / 遥测与命令(README §Domain)",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/contracts": "*"
+  }
+}

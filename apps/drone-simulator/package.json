@@ -23,6 +23,7 @@
     "@simulation/sandbox-core": "*",
     "@simulation/task-core": "*",
     "@simulation/three-adapter": "*",
+    "@simulation/vehicle-agent": "*",
     "@vue-flow/background": "^1.3.2",
     "@vue-flow/controls": "^1.1.3",
     "@vue-flow/core": "^1.48.2",

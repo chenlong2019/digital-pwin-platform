@@ -19,6 +19,7 @@
     "@simulation/recorder": "*",
     "@simulation/sandbox-core": "*",
     "@simulation/simulation-core": "*",
-    "@simulation/task-core": "*"
+    "@simulation/task-core": "*",
+    "@simulation/vehicle-agent": "*"
   }
 }

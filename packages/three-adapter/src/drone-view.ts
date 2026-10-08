@@ -12,8 +12,10 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { AgentRenderView } from '@simulation/contracts'
+import type { BodyPartReport, BodyView } from './body-view'
 import type { RigPartReport } from './drone-rig'
 import { DroneRig } from './drone-rig'
+import { normalizeModel } from './model-normalize'
 import type { AuxLightMode, BatteryLightMode, DroneLightsSnapshot, StatusLightKey } from './drone-lights'
 import { DroneLights, isStatusLightKey } from './drone-lights'
 
@@ -32,7 +34,7 @@ export interface DroneViewOptions {
   readonly initialArmFold?: number
 }
 
-export class DroneView {
+export class DroneView implements BodyView {
   readonly model: THREE.Group
   readonly rig: DroneRig
   readonly lights: DroneLights
@@ -79,11 +81,18 @@ export class DroneView {
     return new DroneView(model, rig, lights, groundOffsetY, initialFold)
   }
 
+  /** BodyView:挂进场景的根对象 */
+  get object3d(): THREE.Object3D {
+    return this.model
+  }
+
   /**
    * 把一帧渲染视图应用到机体。
    * 位姿经 applyBodyPose 单点写入,画面与遥测永远是同一份状态。
+   * view 为 null(本帧没有渲染目标)时保持上一次姿态不动。
    */
-  apply(view: AgentRenderView, deltaSeconds: number): void {
+  apply(view: AgentRenderView | null, deltaSeconds: number): void {
+    if (!view) return
     const pose = view.pose
     this.model.visible = view.visible
     this.rig.applyBodyPose({
@@ -182,6 +191,11 @@ export class DroneView {
     return this.rig.parts
   }
 
+  /** BodyView:统一命名 —— 适配器只认这一个 */
+  getPartReport(): ReadonlyArray<BodyPartReport> {
+    return this.rig.parts
+  }
+
   get modelHealthText(): string {
     const parts = this.rig.parts
     const missing = parts.filter((part) => !part.found)
@@ -203,19 +217,4 @@ export class DroneView {
     })
     this.model.parent?.remove(this.model)
   }
-}
-
-/** 缩放到真实尺寸、水平居中、底部贴地,返回贴地所需的 y 偏移 */
-function normalizeModel(model: THREE.Group, sizeMeters: number): number {
-  const initialBounds = new THREE.Box3().setFromObject(model)
-  const size = initialBounds.getSize(new THREE.Vector3())
-  const largestDimension = Math.max(size.x, size.y, size.z)
-  if (largestDimension > 0) model.scale.setScalar(sizeMeters / largestDimension)
-
-  const bounds = new THREE.Box3().setFromObject(model)
-  const center = bounds.getCenter(new THREE.Vector3())
-  model.position.x -= center.x
-  model.position.z -= center.z
-  model.position.y -= bounds.min.y
-  return model.position.y
 }

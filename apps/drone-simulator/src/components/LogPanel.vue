@@ -57,10 +57,29 @@ const COMMAND_LABELS: Record<string, string> = {
   'drone.setZoom': '变焦',
   'drone.toggleRecording': '录制开关',
   'drone.takePhoto': '拍照',
+  // 汽车 —— 与无人机指令同表:日志面板本来就不该认识载具,只认识「指令类型 → 中文」
+  'vehicle.setGear': '挂挡',
+  'vehicle.setDrive': '油门 / 制动',
+  'vehicle.setSteer': '转向',
+  'vehicle.setDoor': '车门',
+  'vehicle.setMirror': '后视镜',
+  'vehicle.setLights': '灯光',
+  'vehicle.forceBattery': '强制电量',
 }
 
 function commandLabel(type: string): string {
   return COMMAND_LABELS[type] ?? type
+}
+
+/** 指令来源的人话 —— 日志面板认 actorId,不认载具 */
+const ACTOR_LABELS: Record<string, string> = {
+  pilot: '操作员',
+  driver: '驾驶员',
+  system: '系统',
+}
+
+function actorText(actorId: string): string {
+  return ACTOR_LABELS[actorId] ?? actorId
 }
 </script>
 
@@ -93,7 +112,7 @@ function commandLabel(type: string): string {
         <p v-if="sortedCommands.length === 0" class="hint">暂无指令。用键盘 WASD / 按钮下发一条试试。</p>
         <div v-for="command in sortedCommands" :key="command.commandId" class="log__row">
           <span class="log__time mono">{{ formatClock(command.simulationTime) }}</span>
-          <span class="log__tag">{{ command.actorId === 'pilot' ? '操作员' : command.actorId }}</span>
+          <span class="log__tag">{{ actorText(command.actorId) }}</span>
           <span class="log__type mono">{{ command.commandId }}</span>
           <span class="log__message">{{ commandLabel(command.type) }}</span>
         </div>
