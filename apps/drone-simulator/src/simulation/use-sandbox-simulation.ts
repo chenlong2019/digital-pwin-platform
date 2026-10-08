@@ -37,7 +37,7 @@ import type {
   RadarSnapshot,
   StatusLightKey,
 } from '@simulation/three-adapter'
-import type { DroneSnapshot } from '@simulation/drone-agent'
+import type { DroneAgentSnapshot } from '@simulation/drone-agent'
 import { DRONE_COMMAND, readDroneTelemetry } from '@simulation/drone-agent'
 import { SimulationDomainAPI } from '@simulation/domain-api'
 import { captureReplayData } from '@simulation/replay'
@@ -48,6 +48,7 @@ import { defaultWaypoints } from '@simulation/task-core'
 import { scenarioToSceneObstacles } from './scene-mapping'
 import type { StoredReplay } from './replay-store'
 import type {
+  IndustryTaskPlugin,
   RecordingResult,
   RendererInfo,
   SandboxMetrics,
@@ -79,6 +80,14 @@ export interface UseSandboxSimulationOptions {
   /** 构造后立即启动仿真,默认 true */
   readonly autoStart?: boolean
   readonly timeScale?: number
+  /**
+   * 行业任务插件 —— 页面注入,会话原样转交(README §3.3)。
+   *
+   * 为什么不直接把行业任务写在这里:那样无人机沙盒的包里就会带上电网巡检的全部代码,
+   * 而首屏根本用不到它(与「按需加载汽车页」是同一条理由)。插件让这个通用的
+   * 会话粘合点保持**行业无关** —— 它只在需要的时候调用插件,不 import 任何行业包。
+   */
+  readonly industryTask?: (session: SimulationDomainAPI) => IndustryTaskPlugin
 }
 
 export interface SandboxSimulation extends SimulationSessionView {
@@ -90,7 +99,14 @@ export interface SandboxSimulation extends SimulationSessionView {
   readonly projector: AgentViewProjector
 
   readonly metrics: ShallowRef<SandboxMetrics>
-  readonly telemetry: ShallowRef<DroneSnapshot | null>
+  /**
+   * 无人机遥测快照。
+   *
+   * 取的是 **Agent 快照**(DroneAgentSnapshot)而不只是机体快照:它多一个 `aim`
+   * —— 云台在瞄哪个点、误差多少。巡检面板要显示「这一拍对准了没有」,
+   * 而瞄准解算发生在 Agent 里,所以这份读数必须从这里出来。
+   */
+  readonly telemetry: ShallowRef<DroneAgentSnapshot | null>
   /** 环境快照 —— 界面显示「沙盒里实际生效的值」,而不是自己刚拖的滑块 */
   readonly environment: ShallowRef<EnvironmentSnapshot | null>
   readonly task: ShallowRef<TaskSnapshot | null>
@@ -106,10 +122,13 @@ export interface SandboxSimulation extends SimulationSessionView {
   readonly cameraMode: Ref<CameraMode>
   readonly obstaclesVisible: Ref<boolean>
   readonly axesVisible: Ref<boolean>
+  readonly wiresVisible: Ref<boolean>
   readonly radarAim: Ref<RadarAim>
   readonly radarBeamsVisible: Ref<boolean>
   readonly auxBeamVisible: Ref<boolean>
   readonly statusLightOverride: ShallowRef<StatusLightKey | null>
+  /** 页面注入的行业任务插件;没注入时为 null */
+  readonly industryTask: IndustryTaskPlugin | null
 
   attachRenderer(renderer: SandboxRenderer | null): void
   refreshRendererInfo(): void
@@ -147,6 +166,14 @@ export interface SandboxSimulation extends SimulationSessionView {
   setRecordingReadyHandler(handler: ((result: RecordingResult) => void) | null): void
 
   createWaypointTask(waypoints?: ReadonlyArray<Waypoint>): TaskId | null
+  /**
+   * 指定「当前任务」。
+   *
+   * 航点任务的创建函数会自己认领,但**行业任务由插件创建,会话不认识它** ——
+   * 所以插件调用方要把 id 显式交回来。没有这一步,`task` 快照的兜底会一直停在
+   * `tasks[0]`,第二次创建的新任务就再也控制不到(暂停/中止都作用在旧任务上)。
+   */
+  focusTask(id: TaskId | null): void
   startTask(): Command | null
   pauseTask(): Command | null
   resumeTask(): Command | null
@@ -169,6 +196,7 @@ export interface SandboxSimulation extends SimulationSessionView {
   clearTrail(): void
   setObstaclesVisible(visible: boolean): void
   setAxesVisible(visible: boolean): void
+  setWiresVisible(visible: boolean): void
 
   setRadarAim(aim: RadarAim): void
   setRadarBeamsVisible(visible: boolean): void
@@ -216,7 +244,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
   // ————————————————————————————— 只读视图 —————————————————————————————
 
   const metrics = shallowRef<SandboxMetrics>(EMPTY_METRICS)
-  const telemetry = shallowRef<DroneSnapshot | null>(null)
+  const telemetry = shallowRef<DroneAgentSnapshot | null>(null)
   const environment = shallowRef<EnvironmentSnapshot | null>(null)
   const task = shallowRef<TaskSnapshot | null>(null)
   const events = shallowRef<ReadonlyArray<SimEvent>>([])
@@ -228,10 +256,14 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
   const cameraMode = ref<CameraMode>('orbit')
   const obstaclesVisible = ref(true)
   const axesVisible = ref(false)
+  const wiresVisible = ref(true)
   const radarAim = ref<RadarAim>('forward')
   const radarBeamsVisible = ref(false)
   const auxBeamVisible = ref(false)
   const statusLightOverride = shallowRef<StatusLightKey | null>(null)
+
+  // 行业任务插件由页面注入 —— 会话自己不认识任何行业包
+  const industryTask = options.industryTask ? options.industryTask(session) : null
 
   const taskResult = computed<TaskResult | null>(() => task.value?.result ?? null)
 
@@ -445,6 +477,11 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     return id
   }
 
+  function focusTask(id: TaskId | null): void {
+    activeTaskId = id
+    refreshHud()
+  }
+
   function currentTaskId(): TaskId | null {
     return activeTaskId ?? session.getTaskSnapshots()[0]?.id ?? null
   }
@@ -497,6 +534,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     renderer?.setCameraMode?.(cameraMode.value)
     renderer?.setObstaclesVisible?.(obstaclesVisible.value)
     renderer?.setAxesVisible?.(axesVisible.value)
+    renderer?.setWiresVisible?.(wiresVisible.value)
     renderer?.setRadarAim?.(radarAim.value)
     renderer?.setRadarBeamsVisible?.(radarBeamsVisible.value)
     renderer?.setAuxBeamVisible?.(auxBeamVisible.value)
@@ -548,6 +586,12 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
   function setAxesVisible(visible: boolean): void {
     axesVisible.value = visible
     renderer?.setAxesVisible?.(visible)
+  }
+
+  /** 导线等纯视觉元素的显隐;场景里没有导线时这一步是无害的空操作 */
+  function setWiresVisible(visible: boolean): void {
+    wiresVisible.value = visible
+    renderer?.setWiresVisible?.(visible)
   }
 
   // ————————————————————————————— 传感器与灯光 —————————————————————————————
@@ -646,10 +690,12 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     cameraMode,
     obstaclesVisible,
     axesVisible,
+    wiresVisible,
     radarAim,
     radarBeamsVisible,
     auxBeamVisible,
     statusLightOverride,
+    industryTask,
 
     attachRenderer,
     refreshRendererInfo,
@@ -675,6 +721,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     setRecordingReadyHandler,
 
     createWaypointTask,
+    focusTask,
     startTask,
     pauseTask,
     resumeTask,
@@ -689,6 +736,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     clearTrail,
     setObstaclesVisible,
     setAxesVisible,
+    setWiresVisible,
 
     setRadarAim,
     setRadarBeamsVisible,

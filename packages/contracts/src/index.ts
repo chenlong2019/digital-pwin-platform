@@ -193,6 +193,12 @@ export interface CommandRejection {
  * 这些是「任何可动机器人都会有的动作」,所以属于平台契约;无人机专属的
  * 指令(切挡位、折叠机臂、云台…)由领域包自定义 type,不污染这一层。
  * 好处:task-core 发指令时不需要知道 DroneAgent 的私有指令名。
+ *
+ * `aimAt` 的判断标准与上面一致:它说的是「**把载荷对准世界系某一点**」,
+ * 而不是「把云台俯仰设成多少度」。无人机云台、机器人相机臂、车辆光电转塔
+ * 都认这条指令,而各自的机械解算(谁是自由度、行程多大、增稳怎么做)
+ * 留在领域包里 —— 所以巡航类任务可以要求「看清那个塔头」,
+ * 却不需要认识云台这个部件。
  */
 export const PLATFORM_COMMAND = {
   powerOn: 'agent.powerOn',
@@ -205,6 +211,8 @@ export const PLATFORM_COMMAND = {
   returnToHome: 'agent.returnToHome',
   cancelReturnToHome: 'agent.cancelReturnToHome',
   reset: 'agent.reset',
+  aimAt: 'agent.aimAt',
+  clearAim: 'agent.clearAim',
   startTask: 'task.start',
   pauseTask: 'task.pause',
   resumeTask: 'task.resume',
@@ -230,6 +238,31 @@ export function neutralizeMove(): MoveCommandPayload {
 }
 
 export interface ReturnToHomePayload {
+  readonly reason?: string
+}
+
+/**
+ * agent.aimAt 的载荷:把载荷(云台 / 相机 / 转塔)对准世界系一个点。
+ *
+ * 只给目标点,不给角度 —— 解算是领域包的事。观测类任务因此可以写下
+ * 「看清 3 号塔上层横担左侧绝缘子」,而完全不涉及云台行程、增稳、
+ * 俯仰角符号这些设备细节。
+ */
+export interface AimAtPayload {
+  /** 目标点世界坐标 */
+  readonly x: number
+  readonly y: number
+  readonly z: number
+  /**
+   * 目标的人类可读标签,只进日志与状态回显,不参与解算。
+   * 有它才能回答「云台现在对着哪儿」,否则界面上只有三个数字。
+   */
+  readonly label?: string
+  /** 是否随动:机体移动时持续重算(默认 true)。false = 只在收到指令时解算一次 */
+  readonly track?: boolean
+}
+
+export interface ClearAimPayload {
   readonly reason?: string
 }
 

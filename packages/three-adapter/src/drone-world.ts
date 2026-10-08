@@ -30,6 +30,21 @@ export interface SceneObstacle {
 /** 旧名保留:firstapp 里叫 ObstacleSpec */
 export type ObstacleSpec = SceneObstacle
 
+/**
+ * 导线(纯视觉元素,**不参与避障判定**)。
+ *
+ * 与 `SceneObstacle` 的关键差别就在这里:障碍物同时是物理判定数据,而导线只是画法 ——
+ * 输电线路巡检场景里那条垂下来的线,不该把无人机挡在半空。
+ * 顶点序列由应用层算好(它才认识资产台账),渲染层只负责连起来。
+ */
+export interface SceneWire {
+  readonly id: string
+  readonly label: string
+  /** 折线顶点(世界系),至少两个点 */
+  readonly points: ReadonlyArray<{ x: number; y: number; z: number }>
+  readonly color: number
+}
+
 /** 默认障碍物:两组建筑 + 一根正前方灯杆 + 三棵树 + 一道悬空天桥,都在起飞点 30 米内 */
 export const DEFAULT_OBSTACLES: SceneObstacle[] = [
   { name: 'BUILDING_A', label: '建筑 A', x: 16, z: -12, width: 9, depth: 9, height: 13, color: 0x2c3a44 },
@@ -56,6 +71,8 @@ export class DroneWorld {
   private trailLine: THREE.Line | null = null
   private trailCount = 0
   private readonly lastTrailPoint = new THREE.Vector3(Number.NaN, 0, 0)
+  /** 导线对象(纯视觉)。与障碍物分开存,因为它们的显隐是两件事 */
+  private readonly wires: THREE.Object3D[] = []
 
   readonly collisionBoxes: ObstacleBox[] = []
   readonly specs: ObstacleSpec[]
@@ -215,6 +232,54 @@ export class DroneWorld {
   }
 
   /**
+   * 设置导线(纯视觉)。重复调用会先释放上一批 —— 场景是长驻对象,
+   * 不释放就会在切换线路时慢慢攒出显存泄漏。
+   */
+  setWires(wires: ReadonlyArray<SceneWire>): void {
+    this.clearWires()
+    for (const wire of wires) {
+      if (wire.points.length < 2) continue
+      const positions = new Float32Array(wire.points.length * 3)
+      wire.points.forEach((point, index) => {
+        positions[index * 3] = point.x
+        positions[index * 3 + 1] = point.y
+        positions[index * 3 + 2] = point.z
+      })
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+      const material = new THREE.LineBasicMaterial({
+        color: wire.color,
+        transparent: true,
+        opacity: 0.85,
+        toneMapped: false,
+      })
+      const line = new THREE.Line(geometry, material)
+      line.name = wire.id
+      line.frustumCulled = false
+      this.group.add(line)
+      this.wires.push(line)
+    }
+  }
+
+  private clearWires(): void {
+    for (const object of this.wires) {
+      this.group.remove(object)
+      const line = object as THREE.Line
+      line.geometry?.dispose()
+      const material = line.material
+      if (Array.isArray(material)) material.forEach((item) => item.dispose())
+      else material?.dispose()
+    }
+    this.wires.length = 0
+  }
+
+  setWiresVisible(visible: boolean): void {
+    this.wires.forEach((wire) => {
+      wire.visible = visible
+    })
+  }
+
+  /**
    * 锥形视场检测(雷达/视觉传感器用):传感器是一台有视场的相机,不是一条无粗细的射线。
    *
    * 以 origin 为锥顶、axis 为瞄准轴、两个正交轴 u1/u2 上的半张角为 halfU1/halfU2,
@@ -282,6 +347,7 @@ export class DroneWorld {
   }
 
   destroy(): void {
+    this.clearWires()
     this.scene.remove(this.group)
     this.disposables.forEach((item) => item.dispose())
     this.disposables.length = 0

@@ -26,6 +26,13 @@ const MANIFEST = {
   'sandbox-core': { layer: 'Core', allow: ['contracts', 'simulation-core'], dir: 'packages/sandbox-core' },
 
   'task-core': { layer: 'Capability', allow: ['contracts', 'simulation-core'], dir: 'packages/task-core' },
+  // 行业作业能力(不是载具):电网巡检的资产模型 / 航线规划 / 巡检任务 / 判定 / 报告。
+  // 落在 Capability 层、不依赖任何载体包 —— 换载具执行同一套巡检作业时它不用改。
+  'grid-inspection': {
+    layer: 'Capability',
+    allow: ['contracts', 'sandbox-core', 'simulation-core'],
+    dir: 'packages/grid-inspection',
+  },
   recorder: { layer: 'Capability', allow: ['contracts'], dir: 'packages/recorder' },
   result: { layer: 'Capability', allow: ['contracts', 'recorder'], dir: 'packages/result' },
   replay: { layer: 'Capability', allow: ['contracts', 'recorder', 'simulation-core'], dir: 'packages/replay' },
@@ -62,6 +69,7 @@ const MANIFEST = {
       'agent-core',
       'sandbox-core',
       'task-core',
+      'grid-inspection',
       'recorder',
       'drone-agent',
       'vehicle-agent',

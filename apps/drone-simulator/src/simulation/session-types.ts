@@ -13,6 +13,7 @@ import type {
   AgentViewProjector,
   RuntimeStatus,
   SimulationSnapshot,
+  TaskId,
 } from '@simulation/contracts'
 import type { Scenario } from '@simulation/sandbox-core'
 import type {
@@ -24,6 +25,7 @@ import type {
   RadarSnapshot,
   RigPartReport,
   SceneObstacle,
+  SceneWire,
 } from '@simulation/three-adapter'
 import type { AuxLightMode, BatteryLightMode, StatusLightKey } from '@simulation/three-adapter'
 
@@ -69,6 +71,8 @@ export interface SandboxRenderer {
   clearTrail?(): void
   setObstaclesVisible?(visible: boolean): void
   setAxesVisible?(visible: boolean): void
+  /** 导线等纯视觉折线的显隐(可选能力;没有导线的场景不会用到) */
+  setWiresVisible?(visible: boolean): void
   getRigReport?(): ReadonlyArray<RigPartReport>
   // —— 挂载在机体上的传感器与灯光(可选能力;换成 Cesium 适配器时可以没有) ——
   getRadarSnapshot?(): RadarSnapshot
@@ -94,6 +98,22 @@ export interface RecordingResult {
 }
 
 /**
+ * 行业任务插件 —— 让通用会话不必认识任何行业包(README §3.3)。
+ *
+ * 「那些行业包里的任务怎么创建、交付物怎么取」是使用方的知识,不该长在会话里:
+ * 会话只留两个口子,页面把本行业的做法包成插件塞进来。于是同一份会话代码
+ * 既能跑航点任务,也能跑电网巡检,而它一行都不认识 `grid-inspection`。
+ *
+ * 交付物用 `unknown`:会话只负责转交,由插件的提供方(它当然认识自己那套类型)收窄。
+ */
+export interface IndustryTaskPlugin {
+  /** 创建一个本行业的任务;返回任务 id,失败返回 null */
+  create(): TaskId | null
+  /** 取任务的交付物(巡检报告之类);任务不存在时返回 null */
+  artifact(taskId: TaskId, generatedAt: string): unknown
+}
+
+/**
  * 会话的**通用**能力 —— 无人机 / 汽车 / 将来的船都满足它。
  * 视口组件只依赖这个接口,所以它不需要知道页面跑的是哪种载具。
  */
@@ -102,6 +122,13 @@ export interface SimulationSessionView {
   readonly sessionLabel: string
   readonly projector: AgentViewProjector
   readonly obstacles: ReadonlyArray<SceneObstacle>
+  /**
+   * 纯视觉折线(电网巡检的导线)。
+   *
+   * 放在通用会话而不是领域会话里,是因为视口只认「场景有哪些元素」:
+   * 它把 obstacles 与 wires 一起交给渲染适配器,不需要知道这是哪个行业。
+   */
+  readonly wires?: ReadonlyArray<SceneWire>
   /**
    * 机体可视化工厂 —— 视口据此决定加载哪种模型。
    * 不提供 = 无人机(适配器的默认),所以无人机会话不需要写这一项。

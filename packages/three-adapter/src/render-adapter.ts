@@ -34,7 +34,7 @@ import type { DroneLightsSnapshot, StatusLightKey } from './drone-lights'
 import type { BatteryLightMode, AuxLightMode } from './drone-lights'
 import type { RadarAim, RadarSnapshot } from './drone-radar'
 import { DroneRadar } from './drone-radar'
-import type { CameraMode, PhotoShot, SceneObstacle } from './sandbox-scene'
+import type { CameraMode, PhotoShot, SceneObstacle, SceneWire } from './sandbox-scene'
 import { CAMERA_MODE_LIST, SandboxScene } from './sandbox-scene'
 import type { DroneViewOptions } from './drone-view'
 import { DroneView } from './drone-view'
@@ -54,6 +54,8 @@ export interface ThreeRenderAdapterOptions {
   readonly body?: BodyViewFactory
   readonly model?: DroneViewOptions
   readonly obstacles?: ReadonlyArray<SceneObstacle>
+  /** 导线等纯视觉折线(不参与避障判定);无人机构件之外的第二类场景元素 */
+  readonly wires?: ReadonlyArray<SceneWire>
   readonly background?: string
   readonly initialCameraTarget?: { x: number; y: number; z: number }
 }
@@ -111,6 +113,7 @@ export class ThreeRenderAdapter implements RenderAdapter {
     const scene = new SandboxScene({
       container: this.options.container,
       obstacles: this.options.obstacles,
+      wires: this.options.wires,
       background: this.options.background,
     })
     this.sandboxScene = scene
@@ -248,6 +251,15 @@ export class ThreeRenderAdapter implements RenderAdapter {
     this.sandboxScene?.setObstaclesVisible(visible)
   }
 
+  /** 替换场景里的导线(纯视觉);切换线路时用,不必重建整个适配器 */
+  setWires(wires: ReadonlyArray<SceneWire>): void {
+    this.sandboxScene?.setWires(wires)
+  }
+
+  setWiresVisible(visible: boolean): void {
+    this.sandboxScene?.setWiresVisible(visible)
+  }
+
   setAxesVisible(visible: boolean): void {
     this.sandboxScene?.setAxesVisible(visible)
   }
@@ -349,4 +361,4 @@ export class ThreeRenderAdapter implements RenderAdapter {
 }
 
 export { CAMERA_MODE_LIST }
-export type { CameraMode, PhotoShot, SceneObstacle }
+export type { CameraMode, PhotoShot, SceneObstacle, SceneWire }

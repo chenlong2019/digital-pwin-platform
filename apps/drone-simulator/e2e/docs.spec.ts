@@ -8,11 +8,15 @@ test.describe('项目文档页', () => {
     await page.goto('/docs')
     await expect(page.getByTestId('docs-article')).toContainText('一键起飞')
 
-    // 点手册里的某一章,正文应当真的滚过去
+    // 点手册里的某一章,正文应当真的滚过去。
+    // 章节号**不写死**:手册中间插一章,后面所有编号都会后移(「常见问题」就因为
+    // 前面插了「电网巡检」而从 9 挪到了 10)。断言只关心「这一章点得到、正文跟得上」,
+    // 别把测试钉在会变的编号上。
+    const faqLink = page.getByTestId(/^docs-link-\d+-常见问题$/)
     const article = page.getByTestId('docs-article')
-    await page.getByTestId('docs-link-9-常见问题').click()
+    await faqLink.click()
     await expect.poll(() => article.evaluate((el) => el.scrollTop)).toBeGreaterThan(200)
-    await expect(page.getByTestId('docs-link-9-常见问题')).toHaveClass(/docs__link--active/)
+    await expect(faqLink).toHaveClass(/docs__link--active/)
 
     expect(errors).toEqual([])
   })

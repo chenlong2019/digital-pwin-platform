@@ -350,7 +350,22 @@ export class DroneSim {
   /** 位置:y 为相对起飞点的高度(AGL),x/z 为水平偏移 */
   position = { x: 0, y: 0, z: 0 }
   velocity = { x: 0, y: 0, z: 0 }
+  /**
+   * 机头朝向(度,世界系罗盘:0 = 北、顺时针增加)。
+   *
+   * ⚠️ 它的**坐标系与世界系一致**,不是「相对出生朝向的偏移」。理由:本类里所有
+   * 用它算方向的地方(摇杆解算、倾斜、避障探测、返航对准)本来就都在世界系里 ——
+   * 位置那套「相对起飞点」的换算只适用于平移。所以要改出生朝向,是改
+   * `spawnHeadingDeg`,而不是在外面给读数加偏移。
+   */
   heading = 0
+  /**
+   * 出生航向(度,世界系):场景里给的机头朝向。
+   *
+   * 上电与重置都把机头摆回这里,而不是永远摆回正北 —— 否则「场景说朝南、
+   * 飞行却按正北解算」,出生航向不为 0 的机体会边转边飞反方向。
+   */
+  spawnHeadingDeg = 0
   tiltPitch = 0
   tiltRoll = 0
   motorLoad = 0
@@ -368,6 +383,13 @@ export class DroneSim {
   gimbalPitch = -10
   gimbalRoll = 0
   gimbalYaw = 0
+  /**
+   * 载荷瞄准期间为 true:云台偏航由瞄准解算持有,不再自动回中。
+   *
+   * 回中是「松手后镜头自然回到机头方向」的拟真行为,但瞄准时每 tick 都被拉回 0
+   * 就永远对不上目标 —— 所以瞄准期间必须把这条行为关掉。由 Agent 写入解算结果时置位。
+   */
+  aimHold = false
 
   events: SimEvent[] = []
 
@@ -495,7 +517,7 @@ export class DroneSim {
     }
     this.phase = 'selfCheck'
     this.phaseTime = 0
-    this.heading = 0
+    this.heading = this.spawnHeadingDeg
     this.position = { x: 0, y: 0, z: 0 }
     this.velocity = { x: 0, y: 0, z: 0 }
     this.batteryUsedWh = 0
@@ -616,7 +638,7 @@ export class DroneSim {
     this.velocity = { x: 0, y: 0, z: 0 }
     this.tiltPitch = 0
     this.tiltRoll = 0
-    this.heading = 0
+    this.heading = this.spawnHeadingDeg
     this.motorLoad = 0
     this.damaged = false
     this.batteryUsedWh = 0
@@ -626,6 +648,7 @@ export class DroneSim {
     this.recording = false
     this.recordSeconds = 0
     this.rthReason = ''
+    this.aimHold = false
     this.pushEvent('info', '沙盒已重置')
   }
 
@@ -1267,8 +1290,27 @@ export class DroneSim {
     this.gimbalPitch = clamp(pitch, DRONE_SPEC.gimbalPitchMin, DRONE_SPEC.gimbalPitchMax)
   }
 
+  /**
+   * 写入一次瞄准解算结果(俯仰 + 偏航),并锁定偏航不回中。
+   *
+   * 只接收**已被解算过的设备角**:目标在世界系哪个方向、要转多少度,
+   * 是 Agent 的事(它才知道原点与航向);这里只负责「按行程限幅 + 采住」。
+   * 两个角色分开之后,这个零依赖内核仍然不认识世界系。
+   */
+  setGimbalAim(pitchDeg: number, yawDeg: number): void {
+    this.gimbalPitch = clamp(pitchDeg, DRONE_SPEC.gimbalPitchMin, DRONE_SPEC.gimbalPitchMax)
+    this.gimbalYaw = clamp(yawDeg, -DRONE_SPEC.gimbalYawRange, DRONE_SPEC.gimbalYawRange)
+    this.aimHold = true
+  }
+
+  /** 解除瞄准:偏航恢复自动回中 */
+  clearGimbalAim(): void {
+    this.aimHold = false
+  }
+
   private updateCamera(delta: number): void {
-    // 云台横滚由 updateTilt 增稳,偏航缓慢回中
+    // 云台横滚由 updateTilt 增稳;偏航缓慢回中 —— 但瞄准期间偏航归解算所有,不能回中
+    if (this.aimHold) return
     this.gimbalYaw = lerp(this.gimbalYaw, 0, Math.min(1, delta * 1.2))
   }
 

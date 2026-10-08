@@ -51,6 +51,8 @@ import {
 } from '@simulation/vehicle-agent'
 import type { AgentTrack, RecorderStats } from '@simulation/recorder'
 import { SimulationRecorder } from '@simulation/recorder'
+import type { InspectionRecord, InspectionReport, InspectionRoute } from '@simulation/grid-inspection'
+import { GridInspectionTask } from '@simulation/grid-inspection'
 
 // ————————————————————————————— Authority —————————————————————————————
 
@@ -188,6 +190,26 @@ export interface CreateWaypointTaskInput {
   /** 起飞判定高度(米);任务会在此之上继续爬升到首个航点的高度再开始巡航 */
   readonly takeoffAltitude?: number
   readonly holdSeconds?: number
+  readonly landAtEnd?: boolean
+}
+
+/**
+ * 创建巡检任务的入参。
+ *
+ * `route` 由调用方传进来,而不是在这里根据场景现算 —— 因为「用多大镜头、每个拍点停多久」
+ * 是**作业方案**,属于使用方的决定(§3.3 Package First:包提供能力,应用做组合)。
+ * 任务拿到方案后就完全自主,不再依赖任何外部状态。
+ */
+export interface CreateGridInspectionTaskInput {
+  readonly id?: TaskId
+  readonly label?: string
+  readonly agentId?: AgentId
+  readonly route: InspectionRoute
+  /** 判定用种子;不传 = 用场景种子,保证同场景同结论 */
+  readonly seed?: number
+  readonly transitTimeoutS?: number
+  readonly alignTimeoutS?: number
+  readonly maxConsecutiveSkips?: number
   readonly landAtEnd?: boolean
 }
 
@@ -438,6 +460,65 @@ export class SimulationDomainAPI {
     this.runtime.addTask(task)
     this.runtime.emit('info', 'task.created', `已创建任务:${task.label}`, { taskId: id, agentId })
     return id
+  }
+
+  /**
+   * 创建电网巡检任务(README §10 的领域任务,与航点任务同一条 Task 契约)。
+   *
+   * 与 `createWaypointTask` 并列而不是合并:两者的差别不在参数多少,而在
+   * 「作业内容」—— 航点任务只求到达,巡检任务要求到达 → 对准 → 采集 → 判定。
+   * 合成一个「万能任务」就会让参数表变成一个开关堆。
+   */
+  createGridInspectionTask(input: CreateGridInspectionTaskInput): TaskId | null {
+    const agentId = input.agentId ?? this.primaryDroneId()
+    if (agentId === undefined) {
+      this.runtime.emit('error', 'task.create.failed', '没有可用的无人机 Agent,无法创建巡检任务')
+      return null
+    }
+    taskSeq += 1
+    const id = input.id ?? `task-${String(taskSeq).padStart(2, '0')}`
+    const task = new GridInspectionTask({
+      id,
+      label: input.label ?? `电网巡检 ${taskSeq}`,
+      agentId,
+      route: input.route,
+      seed: input.seed ?? this.scenario.seed,
+      transitTimeoutS: input.transitTimeoutS,
+      alignTimeoutS: input.alignTimeoutS,
+      maxConsecutiveSkips: input.maxConsecutiveSkips,
+      landAtEnd: input.landAtEnd,
+    })
+    this.runtime.addTask(task)
+    this.runtime.emit('info', 'task.created', `已创建巡检任务:${task.label}`, {
+      taskId: id,
+      agentId,
+      payload: { shots: input.route.shots.length, parts: input.route.parts.length },
+    })
+    return id
+  }
+
+  /** 取巡检任务的采集记录(尚未完成的记录也在里面,`outcome` 会标成未采集) */
+  getInspectionRecords(id: TaskId): ReadonlyArray<InspectionRecord> {
+    return this.findInspectionTask(id)?.getRecords() ?? []
+  }
+
+  /**
+   * 取巡检报告。`generatedAt` 必填:报告里要写生成时刻,但仿真包不取墙钟(§75)。
+   * 巡检还在跑时取到的是当前进度的截面,状态标 `inProgress`,不打扮成已完成。
+   */
+  getInspectionReport(id: TaskId, generatedAt: string): InspectionReport | null {
+    const task = this.findInspectionTask(id)
+    if (!task) return null
+    return task.report({
+      generatedAt,
+      sessionLabel: this.session.label,
+      scenarioId: this.scenario.id,
+    })
+  }
+
+  private findInspectionTask(id: TaskId): GridInspectionTask | null {
+    const task = this.runtime.listTasks().find((item) => item.id === id)
+    return task instanceof GridInspectionTask ? task : null
   }
 
   startTask(id: TaskId): Command | null {

@@ -21,6 +21,7 @@ const {
   scenario,
   projector,
   obstacles,
+  wires,
   bodyFactory,
   cameraTarget,
   cameraMode,
@@ -63,6 +64,8 @@ async function mountRenderer(): Promise<void> {
     // 会话若指定了机体工厂(比如汽车),视口原样转交 —— 它对载具一无所知
     body: bodyFactory,
     obstacles,
+    // 导线等纯视觉元素:视口只知道「场景还有这些折线」,不知道它们是输电导线
+    wires,
     initialCameraTarget: cameraTarget ?? { x: 0, y: 1.2, z: 0 },
   })
   adapter = next

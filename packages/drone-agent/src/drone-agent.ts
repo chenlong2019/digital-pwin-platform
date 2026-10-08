@@ -28,6 +28,8 @@ import type {
 import { PLATFORM_COMMAND } from '@simulation/contracts'
 import type { DroneSnapshot, FaultFlags, FlightMode, SimConfig, StickState } from './drone-sim'
 import { DEFAULT_CONFIG, DroneSim, NEUTRAL_STICK } from './drone-sim'
+import type { AimSnapshot } from './aim'
+import { solveAim } from './aim'
 
 /** 无人机专属指令 —— 平台契约里没有的概念,留在领域包 */
 export const DRONE_COMMAND = {
@@ -137,6 +139,12 @@ export class DroneAgent implements Agent<DroneSnapshot> {
   private environmentSynced = false
   private obstacleSignature = ''
 
+  /** 载荷瞄准目标(世界系);null = 未瞄准 */
+  private aimTarget: Vec3 | null = null
+  private aimLabel = ''
+  private aimTrack = true
+  private aimSolution: AimSnapshot | null = null
+
   constructor(options: DroneAgentOptions) {
     this.id = options.id
     this.label = options.label ?? 'DJI Mini 4 Pro'
@@ -144,6 +152,11 @@ export class DroneAgent implements Agent<DroneSnapshot> {
     this.originHeadingDeg = options.headingDeg ?? 0
     this.sim = new DroneSim()
     this.sim.config = { ...DEFAULT_CONFIG, ...options.config }
+    // 出生航向交给 sim 自己保管:机头朝向的坐标系与世界系是同一个(见 DroneSim.heading 的说明),
+    // 所以场景给的朝向必须写进 sim,而不是在对外读数上加一层偏移 —— 那样会出现
+    // 「报告朝南、实际按朝北解算」,凡是按航向算的控制律(转场对准、避障探测、返航)都会飞反。
+    this.sim.spawnHeadingDeg = this.originHeadingDeg
+    this.sim.heading = this.originHeadingDeg
     this.armFold = options.factoryFolded === false ? 0 : 1
     this.sim.armFold = this.armFold
     this.syncExternalChecks()
@@ -194,8 +207,14 @@ export class DroneAgent implements Agent<DroneSnapshot> {
     }
   }
 
+  /**
+   * 机头朝向(世界系罗盘)。
+   *
+   * 直接取 sim 的航向:它本身就是世界航向(出生朝向在构造时已经写进去了),
+   * 这里再叠一次场景朝向就会双计 —— 出生航向非 0 时读数与真实机头正好差一个朝向角。
+   */
   get worldHeadingDeg(): number {
-    return (this.originHeadingDeg + this.sim.heading) % 360
+    return this.sim.heading
   }
 
   private get statusValue(): AgentStatus {
@@ -204,10 +223,57 @@ export class DroneAgent implements Agent<DroneSnapshot> {
     return 'active'
   }
 
+  // ————————————————————————————— 载荷瞄准 —————————————————————————————
+
+  /**
+   * 把载荷对准世界系一个点。目标点由调用方给出,角度解算在这里 ——
+   * 因为只有这个类知道机体原点与航向偏移(DroneSim 内部坐标是相对起飞点的)。
+   */
+  setAim(target: Vec3, label = '目标点', track = true): void {
+    this.aimTarget = { ...target }
+    this.aimLabel = label
+    this.aimTrack = track
+    this.aimSolution = null
+    this.sim.aimHold = true
+    this.sim.pushEvent('info', `载荷瞄准:${label}`)
+  }
+
+  /** 解除瞄准,云台偏航恢复自动回中 */
+  clearAim(reason = '载荷解除瞄准'): void {
+    if (!this.aimTarget) return
+    this.aimTarget = null
+    this.aimLabel = ''
+    this.aimSolution = null
+    this.sim.clearGimbalAim()
+    this.sim.pushEvent('info', reason)
+  }
+
+  /** 当前瞄准解算结果;未瞄准时为 null */
+  get aim(): AimSnapshot | null {
+    return this.aimSolution
+  }
+
+  /** 每 tick 重算一次瞄准:机体一动,同一目标的方位与仰角就变了 */
+  private updateAim(): void {
+    const target = this.aimTarget
+    if (!target) return
+    // 单次解算模式(track = false):解出一次就采住,不再随动
+    if (!this.aimTrack && this.aimSolution) {
+      this.sim.setGimbalAim(this.aimSolution.pitchDeg, this.aimSolution.yawDeg)
+      return
+    }
+    const solution = solveAim({ drone: this.worldPosition, headingDeg: this.worldHeadingDeg, target })
+    this.aimSolution = { ...solution, target: { ...target }, label: this.aimLabel, track: this.aimTrack }
+    this.sim.setGimbalAim(solution.pitchDeg, solution.yawDeg)
+  }
+
   // ————————————————————————————— Agent 契约 —————————————————————————————
 
   update(context: AgentUpdateContext): void {
     this.syncEnvironment(context)
+    // 先解算再推进:云台角度必须在 Sim 的 updateCamera 之前写好,
+    // 否则「刚下发瞄准」的那一帧会被偏航回中拉回去,第一帧永远对不上
+    this.updateAim()
     this.sim.step(context.deltaTime)
   }
 
@@ -264,6 +330,26 @@ export class DroneAgent implements Agent<DroneSnapshot> {
       case PLATFORM_COMMAND.reset:
         sim.reset()
         sim.setStick(NEUTRAL_STICK)
+        // 瞄准目标是 Agent 侧状态,复位时一并清掉 —— 否则重置后云台还咬着旧目标
+        this.aimTarget = null
+        this.aimSolution = null
+        this.aimLabel = ''
+        return true
+      case PLATFORM_COMMAND.aimAt: {
+        const source = payloadRecord(command.payload)
+        const x = source['x']
+        const y = source['y']
+        const z = source['z']
+        if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
+          this.sim.pushEvent('warn', '瞄准指令缺少有效的目标坐标,已忽略')
+          return true
+        }
+        const label = typeof source['label'] === 'string' && source['label'] ? source['label'] : '目标点'
+        this.setAim({ x, y, z }, label, source['track'] !== false)
+        return true
+      }
+      case PLATFORM_COMMAND.clearAim:
+        this.clearAim(stringField(command.payload, 'reason', '载荷解除瞄准'))
         return true
 
       // ——— 无人机专属指令 ———
@@ -320,7 +406,7 @@ export class DroneAgent implements Agent<DroneSnapshot> {
     }
   }
 
-  getSnapshot(): AgentSnapshot<DroneSnapshot> {
+  getSnapshot(): AgentSnapshot<DroneAgentSnapshot> {
     const telemetry = this.sim.snapshot()
     return {
       id: this.id,
@@ -329,13 +415,16 @@ export class DroneAgent implements Agent<DroneSnapshot> {
       position: this.worldPosition,
       headingDeg: this.worldHeadingDeg,
       status: this.statusValue,
-      payload: telemetry,
+      // 瞄准解算是 Agent 侧状态(要世界系),不在 DroneSim 里,所以在这里并进载荷
+      payload: { ...telemetry, aim: this.aimSolution },
     }
   }
 
   dispose(): void {
     this.sim.obstacles = []
     this.sim.externalChecks = []
+    this.aimTarget = null
+    this.aimSolution = null
   }
 
   // ————————————————————————————— 环境同步 —————————————————————————————
@@ -364,16 +453,27 @@ export class DroneAgent implements Agent<DroneSnapshot> {
 // ————————————————————————————— 供 UI / Recorder 使用的读取工具 —————————————————————————————
 
 /**
+ * 无人机 Agent 的完整载荷:内核遥测 + Agent 侧附加状态。
+ *
+ * 「载荷」是平台契约里唯一的扩展位(AgentSnapshot.payload 是 unknown),
+ * 所以 Agent 侧算出来的东西(瞄准解算)并在这里,而不是塞进零依赖内核。
+ */
+export interface DroneAgentSnapshot extends DroneSnapshot {
+  /** 载荷瞄准解算结果;未瞄准时为 null */
+  readonly aim: AimSnapshot | null
+}
+
+/**
  * 类型安全地从通用 AgentSnapshot 里读出无人机遥测。
  * 契约层的 payload 是 unknown,由领域包提供唯一的收窄入口,避免 UI 到处写 as。
  */
-export function readDroneTelemetry(snapshot: AgentSnapshot | undefined): DroneSnapshot | undefined {
+export function readDroneTelemetry(snapshot: AgentSnapshot | undefined): DroneAgentSnapshot | undefined {
   if (!snapshot || snapshot.type !== 'drone') return undefined
   const payload = snapshot.payload
   if (payload === null || typeof payload !== 'object') return undefined
-  const candidate = payload as Partial<DroneSnapshot>
+  const candidate = payload as Partial<DroneAgentSnapshot>
   return typeof candidate.phase === 'string' && typeof candidate.batteryPercent === 'number'
-    ? (candidate as DroneSnapshot)
+    ? (candidate as DroneAgentSnapshot)
     : undefined
 }
 

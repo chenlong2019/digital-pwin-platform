@@ -9,7 +9,10 @@
  * 因此它完全不知道「无人机」这个概念 —— 换成车/船/机器人,只要对应 Agent 认领
  * 这些平台指令,同一个任务就能原样复用。这是 README §3.3「Package First」的落点。
  *
- * 控制律分三段,顺序很重要:
+ * 控制律分四段,顺序很重要:
+ *   ⓪ 待命   —— 等机体上电就绪。**上电不等于可飞**:自检 / 预热 / 搜星没走完时
+ *              起飞指令会被 Agent 内部的检查单拒掉,而契约层没有「命令被拒」的回执,
+ *              所以任务只能先等 `AgentStatus` 变 active、再用「高度没动」重发兜底
  *   ① 起飞   —— 离地
  *   ② 爬到航线高度并**原地保持**,再开始水平机动
  *              (这一条是实测踩出来的:边爬边平移会在低空撞进障碍物高度带)
@@ -19,6 +22,7 @@
  */
 import type {
   AgentSnapshot,
+  AgentStatus,
   Task,
   TaskId,
   TaskResult,
@@ -50,10 +54,11 @@ export interface Waypoint {
   readonly radius?: number
 }
 
-export type WaypointStage = 'pending' | 'takingOff' | 'cruising' | 'holding' | 'landing' | 'done'
+export type WaypointStage = 'pending' | 'preparing' | 'takingOff' | 'cruising' | 'holding' | 'landing' | 'done'
 
 export const WAYPOINT_STAGE_LABELS: Record<WaypointStage, string> = {
   pending: '待启动',
+  preparing: '等待机体就绪',
   takingOff: '自动起飞',
   cruising: '巡航中',
   holding: '航点悬停',
@@ -95,6 +100,18 @@ const ALTITUDE_TOLERANCE_M = 0.6
 const OBSTACLE_PROBE_M = 20
 /** 飞越障碍物时在最高点之上留的余量(米) */
 const OBSTACLE_CLEARANCE_M = 3
+/**
+ * 起飞指令重发间隔(秒)。
+ *
+ * 机体「已上电」不等于「可飞」:自检 / 预热 / 搜星没过时,`autoTakeOff()` 会被
+ * Agent 内部的检查单拒掉,而契约层**不提供「命令被拒」的回执** —— 任务发完指令
+ * 就再也收不到任何消息。所以只能按「高度没动」这个可观测量重发。间隔取 1 秒而
+ * 不是每 tick:重发是补一次可能被丢弃的请求,不是持续施压。
+ */
+const TAKEOFF_RETRY_INTERVAL_S = 1
+
+/** 「机体还在地面」的高度判定(米):低于它才认为起飞指令尚未被接受 */
+const GROUND_EPSILON_M = 0.25
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -137,6 +154,10 @@ export class WaypointTask implements Task {
    * 不做滞回的话,一飞过障碍物就会立刻下降到原高度、下一 tick 又探测到它,来回抖。
    */
   private avoidAltitude: number | null = null
+  /** 起飞指令重发倒计时(秒) */
+  private takeoffRetryTimer = 0
+  /** 是否已经就「起飞指令未被接受」提示过一次 —— 提示只该出现一次,不该跟着重发刷屏 */
+  private takeoffRetryNoted = false
 
   constructor(options: WaypointTaskOptions) {
     if (options.waypoints.length === 0) throw new Error('WaypointTask 至少需要一个航点')
@@ -218,10 +239,13 @@ export class WaypointTask implements Task {
 
     switch (this.stage) {
       case 'pending':
-        this.stage = 'takingOff'
+        this.stage = 'preparing'
         this.stageTime = 0
-        this.emit(context, PLATFORM_COMMAND.takeOff, {})
         context.log('info', `任务启动:起飞并爬升至 ${this.climbAltitude} 米航线高度`)
+        break
+
+      case 'preparing':
+        this.updatePreparing(context, snapshot.status)
         break
 
       case 'takingOff':
@@ -251,7 +275,39 @@ export class WaypointTask implements Task {
     }
   }
 
-  /** 起飞 + 原地垂直爬升到航线高度。水平位置必须保持不动,否则会撞进低空障碍物。 */
+  /**
+   * 等机体上电就绪,再发起飞指令。
+   *
+   * 这一步是实测补出来的:会话打开页面就自动上电,但**自检 / 预热 / 搜星还要跑几秒**
+   * —— 这几秒里起飞指令会被 Agent 的内部检查单拒掉。契约层没有「命令被拒」的回执,
+   * 任务发完就把这件事忘了,于是原地空等满整个超时窗口,最后报出「起飞爬升超时」,
+   * 把「机体还没准备好」说成了「飞不起来」。
+   *
+   * 判据用契约层的 `AgentStatus`:它已经区分了「未上电」与「已上电」,所以任务不必
+   * 去猜、也不必知道是哪种载具。上电之后仍有自检要过,那一段交给 `updateTakingOff()`
+   * 的重发去覆盖。
+   */
+  private updatePreparing(context: TaskUpdateContext, status: AgentStatus): void {
+    if (status !== 'active') {
+      if (this.stageTime > this.tuning.takeoffTimeout) {
+        this.fail(context, `等待机体就绪超时(${this.tuning.takeoffTimeout} 秒:机体未上电或处于禁飞状态)`)
+      }
+      return
+    }
+    this.stage = 'takingOff'
+    this.stageTime = 0
+    // 首次指令刚发出去,重发要等一个间隔 —— 否则下一 tick 就会立刻再发一条
+    this.takeoffRetryTimer = TAKEOFF_RETRY_INTERVAL_S
+    this.takeoffRetryNoted = false
+    this.emit(context, PLATFORM_COMMAND.takeOff, {})
+  }
+
+  /**
+   * 起飞 + 原地垂直爬升到航线高度。水平位置必须保持不动,否则会撞进低空障碍物。
+   *
+   * 这里顺带做一件契约层没能力做、但作业必需的事:**确认起飞指令真的被接受了**。
+   * 机体上电 ≠ 机体可飞 —— 自检未过时起飞会被拒且没有回执,能观测到的只有「高度没动」。
+   */
   private updateTakingOff(context: TaskUpdateContext, snapshot: AgentSnapshot): void {
     const altitude = snapshot.position.y
     const target = this.climbAltitude
@@ -268,6 +324,19 @@ export class WaypointTask implements Task {
     if (this.stageTime > this.tuning.takeoffTimeout) {
       this.fail(context, `起飞爬升超时(${this.tuning.takeoffTimeout} 秒未到达 ${target} 米)`)
       return
+    }
+
+    // 只在地面高度重发:一旦离地就说明指令已被接受,再发只是往指令流里灌噪声
+    if (snapshot.status === 'active' && altitude < GROUND_EPSILON_M) {
+      this.takeoffRetryTimer -= context.deltaTime
+      if (this.takeoffRetryTimer <= 0) {
+        this.takeoffRetryTimer = TAKEOFF_RETRY_INTERVAL_S
+        if (!this.takeoffRetryNoted) {
+          this.takeoffRetryNoted = true
+          context.log('warn', '机体尚未接受起飞指令(起飞前检查未完成),任务保持重试')
+        }
+        this.emit(context, PLATFORM_COMMAND.takeOff, {})
+      }
     }
 
     const up = clamp((target - altitude) / ALTITUDE_FULL_SCALE_M, 0, 1)

@@ -15,7 +15,7 @@
  */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import type { SceneObstacle } from './drone-world'
+import type { SceneObstacle, SceneWire } from './drone-world'
 import { DroneWorld } from './drone-world'
 
 export type CameraMode = 'orbit' | 'follow' | 'fpv'
@@ -30,6 +30,8 @@ export interface SandboxSceneOptions {
   readonly container: HTMLElement
   /** 障碍物(几何 + 颜色),由应用层从 Scenario 映射得到 */
   readonly obstacles?: ReadonlyArray<SceneObstacle>
+  /** 导线等纯视觉折线,由应用层从资产台账映射得到(不参与避障判定) */
+  readonly wires?: ReadonlyArray<SceneWire>
   readonly background?: string
 }
 
@@ -173,8 +175,9 @@ export class SandboxScene {
     this.scene.add(this.shadowTarget)
     this.keyLight = keyLight
 
-    // —— 场景内容交给 DroneWorld(地面 / 网格 / 返航点 / 障碍物 / 航迹) ——
+    // —— 场景内容交给 DroneWorld(地面 / 网格 / 返航点 / 障碍物 / 导线 / 航迹) ——
     this.world = new DroneWorld(this.scene, [...(options.obstacles ?? [])])
+    if (options.wires?.length) this.world.setWires(options.wires)
 
     this.axes = new THREE.AxesHelper(1.6)
     this.axes.position.y = 0.01
@@ -290,6 +293,15 @@ export class SandboxScene {
 
   setObstaclesVisible(visible: boolean): void {
     this.world.setObstaclesVisible(visible)
+  }
+
+  /** 替换场景里的导线(纯视觉)。切换线路时调它,不必重建整个场景。 */
+  setWires(wires: ReadonlyArray<SceneWire>): void {
+    this.world.setWires(wires)
+  }
+
+  setWiresVisible(visible: boolean): void {
+    this.world.setWiresVisible(visible)
   }
 
   /** 记录航迹:每移动 0.25 米落一个点,避免长航线把缓冲撑爆 */
@@ -558,4 +570,4 @@ export class SandboxScene {
   }
 }
 
-export type { SceneObstacle }
+export type { SceneObstacle, SceneWire }

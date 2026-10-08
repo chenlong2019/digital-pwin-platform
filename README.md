@@ -23,6 +23,7 @@ npm ci          # 严格按 package-lock.json 安装；没有锁文件时才用 
 npm run dev     # 启动沙盒，默认 http://localhost:5173
                 #   /     无人机沙盒
                 #   /car  汽车沙盒
+                #   /grid 无人机电网巡检
 ```
 
 应用层直接消费 `packages/*` 的 **TypeScript 源码**（不做预构建），改包内源码即时热更。
@@ -63,6 +64,7 @@ packages/                各层能力包，按六层架构分层（§40）
   result/                任务结果聚合：TaskResult / 统计 / 导出
   replay/                历史回放：时间轴 / 控制器 / 快照采样
   input/                 用户输入：键盘 / 摇杆 → InputIntent
+  grid-inspection/       电网巡检：资产台账 / 航线规划 / 巡检任务 / 缺陷判定 / 报告
   domain-api/            领域门面：外部唯一入口
   three-adapter/         渲染适配层（three.js 隔离在此）
 apps/
@@ -75,6 +77,7 @@ apps/
 | --- | --- |
 | `/` | 无人机沙盒 |
 | `/car` | 汽车沙盒（同一套内核的第二个载体） |
+| `/grid` | 无人机电网巡检（行业能力包：航线规划 → 逐塔采集 → 缺陷判定 → 报告导出） |
 | `/replay` | 飞行回放与数据看板（消费记录数据，不跑仿真） |
 | `/flow` | 模块流程图与依赖关系 |
 | `/docs` | 项目文档：使用手册 + 本规范全文 |
@@ -88,12 +91,12 @@ apps/
 （`src/__tests__/docs.spec.ts`）与架构守卫的包清单互相钉住：这里写「已落地」
 而目录不存在、或写「未实现」而目录已经出现，测试都会红。
 
-## 已落地（14 个包 + 1 个应用）
+## 已落地（15 个包 + 1 个应用）
 
 | 层 | 模块 |
 | --- | --- |
 | Core | `contracts` `simulation-core` `agent-core` `sandbox-core` |
-| Capability | `task-core` `recorder` `result` `replay` `input` |
+| Capability | `task-core` `recorder` `result` `replay` `input` `grid-inspection` |
 | Domain | `drone-agent` `vehicle-agent` |
 | API | `domain-api` |
 | Adapter | `three-adapter` |
@@ -122,6 +125,7 @@ apps/
 | §22 回放通道（记录数据 → 渲染视图，不重跑仿真） | 已落地 | `src/__tests__/replay-view.spec.ts` + `e2e/replay.spec.ts` |
 | §74 架构静态检查（依赖方向 / 循环依赖 / 隔离） | 已落地 | `npm run check:arch` |
 | 载体可插拔（同一套内核跑无人机与汽车） | 已落地 | `src/__tests__/vehicle.spec.ts` + `e2e/vehicle.spec.ts` |
+| 行业纵深（资产 → 航线 → 巡检任务 → 判定 → 报告） | 已落地 | `src/__tests__/grid-inspection.spec.ts` + `e2e/grid.spec.ts` |
 | §75 启动性能 / 渲染帧率 / 输入延迟 | 待补 | 需要真机基准与渲染计时采样 |
 | §78–§86 多人协同 / 内存 / 兼容性 / 安全 / 包迁移 | 待补 | 依赖未实现的模块 |
 
@@ -165,6 +169,46 @@ apps/
 所以回放只还原位姿 —— 机臂保持展开（真机在空中必然展开，是必然关系而非编造）、
 桨叶按「离地即转」推导，而灯光与电量给 `null`：记录数据里完全没有，不猜。
 要把可动件也放出来，得先让 `recorder` 采它们（§20 的扩展）。
+
+## 行业纵深：一条完整的电网巡检链路
+
+`/grid` 不是「再做一个演示页」，而是把同一套内核往**行业作业**里推一层：
+同一个 `SimulationDomainAPI`、同一个 `ThreeRenderAdapter`、同一个会话粘合点，
+换上一份行业包，就跑完了从资产到交付物的全链。
+
+```text
+grid-assets       资产台账与地面真值（缺陷藏在哪、部位长什么样）
+     ↓
+inspection-route  航线规划：资产几何 → 拍点序列（Route，与 AgentTrack 相对）
+     ↓
+flight-control    三段控制律：飞过去 / 转机身 / 按住悬停位
+     ↓
+inspection-task   GridInspectionTask：转场 → 对准 → 采集 → 落记录
+     ↓
+defect-detector   判定：成像质量模型 + 确定性漏检/误检
+     ↓
+inspection-report 汇总与导出：覆盖率 / 召回 / 精度 / 缺陷清单（JSON · CSV · Markdown）
+```
+
+它落在 **Capability 层**，只依赖 `contracts` / `sandbox-core` / `simulation-core` ——
+**不依赖 `drone-agent`**。任务全程只发平台指令（`agent.takeOff` / `agent.move` /
+`agent.hover` / `agent.land` / `agent.aimAt`），所以今天挂在无人机上，明天换机器人
+沿线走，资产模型、检测器与报告一个字都不用改。
+
+几个刻意的取舍，都写在对应文件头里：
+
+| 取舍 | 为什么 |
+| --- | --- |
+| 新增平台指令 `agent.aimAt`（给世界系一个点，不给角度） | 云台解算是领域包的事；契约只描述「把载荷对准某点」，任何可动机器人都有这个动作 |
+| 杆塔拆成塔身 / 塔头 / 每层横担三片实体 | 整体方盒会把横担外的空气变成禁区，塔边悬停会被避障反复推开，画面永远在抖 |
+| 塔距压到 42 m（真值 ≥ 300 m） | 要验的是作业流程与判定链，不是绝对尺度；改回真值只动两个常数 |
+| 地面真值只出现在「对账」处 | 真值是仿真世界的特权，现场拿不到；把它混进结论会让人误判判定器到底能不能用 |
+| 召回 / 精度分母为零时给 `null` | 显示 `—` 才是诚实的，给 100% 会让报告比实际漂亮 |
+| 起飞前提做成「等机体就绪 + 重发起飞指令」 | 上电 ≠ 可飞（自检 / 预热 / 搜星要跑几秒），而契约层没有「命令被拒」的回执；启动即起飞只会换来一条与真实原因不符的「起飞爬升超时」 |
+
+唯一「是假的」的地方是 `defect-detector`：真实系统那里是视觉模型或人工看图。
+它被做成可替换的纯函数，并把「为什么没看出来」量化成成像质量 —— 于是换算法时
+航线、任务、报告都不用动，而报告里的召回率与误检率是有意义的。
 
 ---
 

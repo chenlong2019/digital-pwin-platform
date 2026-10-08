@@ -20,6 +20,13 @@ const router = createRouter({
       meta: { title: '汽车沙盒' },
     },
     {
+      path: '/grid',
+      name: 'grid',
+      // 电网巡检页:自带行业包(资产/航线/任务/检测/报告),沙盒首屏不该为它买单
+      component: () => import('../views/GridView.vue'),
+      meta: { title: '电网巡检' },
+    },
+    {
       path: '/replay',
       name: 'replay',
       // 回放页不跑仿真,只消费记录数据;按需加载,沙盒首屏不该为它买单

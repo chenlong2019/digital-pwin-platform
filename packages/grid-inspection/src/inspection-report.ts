@@ -1,0 +1,432 @@
+/**
+ * 巡检记录与报告 —— 把一场巡检变成一份能交付、能对账、能导出的东西。
+ *
+ * 三件事在这里分开,各自有明确归属:
+ *   · `InspectionRecord` —— **一个部位一次采集**的全部事实:位姿、观测几何、
+ *     成像质量、结论,以及地面真值。真值只用于对账,巡检结论本身不含它。
+ *   · `classifyOutcome` —— 结论与真值的对账:命中 / 误报 / 漏检 / 正确排除。
+ *   · 汇总与序列化 —— 覆盖率、召回、精度、缺陷清单,以及 JSON / CSV / Markdown。
+ *
+ * 两个刻意的选择:
+ *   ① **summary 不取墙钟**。`generatedAt` 由调用方注入 —— 包内取一次 `new Date()`
+ *      就会让「同一次会话跑两遍得到同一份报告」这件事失效(README §75)。
+ *   ② **分母为零时 recall / precision 给 null 而不是 1**。「没有真值缺陷」时谈召回率
+ *      是没有意义的,给 100% 会让报告看起来比实际漂亮。显示成 `—` 才是诚实的。
+ */
+import type { Vec3 } from '@simulation/contracts'
+import type { GridLine, PartDefect, PartKind, TowerType, DefectSeverity } from './grid-assets'
+import { PART_KIND_LABELS, SEVERITY_LABELS, TOWER_TYPE_LABELS } from './grid-assets'
+import type { DetectionResult, DetectionVerdict, PartObservation } from './defect-detector'
+import { DETECTOR_VERSION, describeDetection } from './defect-detector'
+import type { InspectionRoute } from './inspection-route'
+
+// ————————————————————————————— 记录 —————————————————————————————
+
+/** 结论与真值的对账结果。`suspect` 计入报警,所以它按「报警」参与 precision */
+export type InspectionOutcome = 'truePositive' | 'falsePositive' | 'missed' | 'trueNegative' | 'unchecked'
+
+export const OUTCOME_LABELS: Record<InspectionOutcome, string> = {
+  truePositive: '命中',
+  falsePositive: '误报',
+  missed: '漏检',
+  trueNegative: '正确排除',
+  unchecked: '未采集',
+}
+
+export interface InspectionRecord {
+  readonly shotId: string
+  readonly towerId: string
+  readonly towerLabel: string
+  /** 全局部位 id:`<塔号>/<部位 id>` */
+  readonly partId: string
+  readonly partLabel: string
+  readonly partKind: PartKind
+  /** 采集时刻的仿真时间(秒) */
+  readonly simulationTime: number
+  /** 采集瞬间的机体位置(世界系) */
+  readonly dronePosition: Vec3
+  /** 采集几何;未采集时为 null */
+  readonly observation: PartObservation | null
+  readonly detection: DetectionResult
+  /** 地面真值 —— 仅用于对账,不是巡检结论的一部分 */
+  readonly truth: PartDefect | null
+  readonly outcome: InspectionOutcome
+}
+
+/** 对账:报警 = 结论不是「正常」(疑似也算报警,因为现场要派人去看) */
+export function classifyOutcome(
+  verdict: DetectionVerdict,
+  truth: PartDefect | null,
+): InspectionOutcome {
+  if (verdict === 'unchecked') return 'unchecked'
+  const alarm = verdict !== 'ok'
+  if (alarm) return truth ? 'truePositive' : 'falsePositive'
+  return truth ? 'missed' : 'trueNegative'
+}
+
+// ————————————————————————————— 报告 —————————————————————————————
+
+export interface TowerReport {
+  readonly towerId: string
+  readonly towerLabel: string
+  readonly towerType: TowerType
+  readonly towerTypeLabel: string
+  readonly partsTotal: number
+  readonly partsChecked: number
+  readonly coverage: number
+  /** 本塔报出的缺陷 + 疑似 */
+  readonly alarms: number
+  readonly defectsReported: number
+  readonly suspects: number
+  readonly truthDefects: number
+  readonly worstSeverity: DefectSeverity | null
+  readonly averageQuality: number | null
+  /** 本塔采集时的最大镜头俯仰绝对值(度):用来发现「全在仰着头看」这类机位问题 */
+  readonly maxTiltDeg: number
+}
+
+export interface InspectionSummary {
+  readonly towersTotal: number
+  readonly towersInspected: number
+  readonly partsTotal: number
+  readonly partsChecked: number
+  readonly partsUnchecked: number
+  /** 覆盖率 = 已采集部位 / 全部部位 */
+  readonly coverage: number
+  readonly shotsPlanned: number
+  readonly shotsTaken: number
+  readonly alarms: number
+  readonly defectsReported: number
+  readonly suspects: number
+  readonly truthDefects: number
+  readonly truePositive: number
+  readonly falsePositive: number
+  readonly missed: number
+  readonly trueNegative: number
+  /** 召回率 = 命中 / (命中 + 漏检);全部部位都没有真值缺陷时为 null */
+  readonly recall: number | null
+  /** 精度 = 命中 / 报警总数;没有报警时为 null */
+  readonly precision: number | null
+  readonly averageQuality: number | null
+  readonly maxAltitudeM: number
+  readonly transitLengthM: number
+  readonly captures: number
+}
+
+export interface InspectionReport {
+  readonly id: string
+  /** 生成时刻 —— 由调用方注入,包内不取墙钟(见文件头 ①) */
+  readonly generatedAt: string
+  readonly detectorVersion: string
+  readonly sessionLabel: string
+  readonly scenarioId: string
+  readonly lineLabel: string
+  readonly voltageKv: number
+  readonly routeLabel: string
+  readonly taskLabel: string
+  /** inProgress = 巡检还在跑,报告反映的是当前进度 */
+  readonly status: 'inProgress' | 'completed' | 'aborted' | 'failed'
+  readonly message: string
+  readonly startedAtS: number
+  readonly finishedAtS: number
+  readonly durationS: number
+  readonly towers: ReadonlyArray<TowerReport>
+  readonly records: ReadonlyArray<InspectionRecord>
+  readonly summary: InspectionSummary
+}
+
+export interface BuildReportInput {
+  readonly route: InspectionRoute
+  readonly records: ReadonlyArray<InspectionRecord>
+  readonly status: InspectionReport['status']
+  readonly message: string
+  readonly sessionLabel: string
+  readonly scenarioId: string
+  readonly taskLabel: string
+  readonly startedAtS: number
+  readonly finishedAtS: number
+  readonly maxAltitudeM: number
+  readonly generatedAt: string
+}
+
+function round(value: number, digits = 3): number {
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
+}
+
+function ratio(numerator: number, denominator: number): number | null {
+  if (denominator <= 0) return null
+  return round(numerator / denominator)
+}
+
+function average(values: ReadonlyArray<number>): number | null {
+  if (values.length === 0) return null
+  let total = 0
+  for (const value of values) total += value
+  return round(total / values.length)
+}
+
+/** 组装一份完整报告:逐塔小结 + 全局汇总。纯函数,可对同一批记录重复调用 */
+export function buildInspectionReport(input: BuildReportInput): InspectionReport {
+  const { route, records } = input
+  const line: GridLine = route.line
+
+  const towers: TowerReport[] = line.towers.map((tower) => {
+    const towerRecords = records.filter((record) => record.towerId === tower.id)
+    const partsOfTower = route.parts.filter((part) => part.towerId === tower.id)
+    const checked = towerRecords.filter((record) => record.outcome !== 'unchecked')
+    const alarms = towerRecords.filter(
+      (record) => record.detection.verdict === 'suspect' || record.detection.verdict === 'defect',
+    )
+    const defectSeverities = towerRecords
+      .filter((record) => record.detection.verdict === 'defect')
+      .map((record) => record.detection.severity)
+    const defectRecords = towerRecords.filter((record) => record.detection.verdict === 'defect')
+    const suspectRecords = towerRecords.filter((record) => record.detection.verdict === 'suspect')
+
+    return {
+      towerId: tower.id,
+      towerLabel: tower.label,
+      towerType: tower.type,
+      towerTypeLabel: TOWER_TYPE_LABELS[tower.type],
+      partsTotal: partsOfTower.length,
+      partsChecked: checked.length,
+      coverage: ratio(checked.length, partsOfTower.length) ?? 0,
+      alarms: alarms.length,
+      defectsReported: defectRecords.length,
+      suspects: suspectRecords.length,
+      truthDefects: tower.defects.length,
+      worstSeverity: defectSeverities.includes('major')
+        ? 'major'
+        : defectSeverities.length > 0
+          ? 'minor'
+          : null,
+      averageQuality: average(checked.map((record) => record.detection.quality.quality)),
+      maxTiltDeg: round(
+        checked.reduce((worst, record) => Math.max(worst, Math.abs(record.observation?.tiltDeg ?? 0)), 0),
+        1,
+      ),
+    }
+  })
+
+  const checkedRecords = records.filter((record) => record.outcome !== 'unchecked')
+  const truePositive = checkedRecords.filter((record) => record.outcome === 'truePositive').length
+  const falsePositive = checkedRecords.filter((record) => record.outcome === 'falsePositive').length
+  const missed = checkedRecords.filter((record) => record.outcome === 'missed').length
+  const trueNegative = checkedRecords.filter((record) => record.outcome === 'trueNegative').length
+
+  const summary: InspectionSummary = {
+    towersTotal: line.towers.length,
+    towersInspected: towers.filter((tower) => tower.partsChecked > 0).length,
+    partsTotal: route.parts.length,
+    partsChecked: checkedRecords.length,
+    partsUnchecked: records.length - checkedRecords.length,
+    coverage: ratio(checkedRecords.length, route.parts.length) ?? 0,
+    shotsPlanned: route.shots.length,
+    shotsTaken: new Set(records.filter((record) => record.outcome !== 'unchecked').map((record) => record.shotId)).size,
+    alarms: checkedRecords.filter((record) => record.detection.verdict === 'suspect' || record.detection.verdict === 'defect')
+      .length,
+    defectsReported: checkedRecords.filter((record) => record.detection.verdict === 'defect').length,
+    suspects: checkedRecords.filter((record) => record.detection.verdict === 'suspect').length,
+    truthDefects: line.towers.reduce((total, tower) => total + tower.defects.length, 0),
+    truePositive,
+    falsePositive,
+    missed,
+    trueNegative,
+    recall: ratio(truePositive, truePositive + missed),
+    precision: ratio(truePositive, truePositive + falsePositive),
+    averageQuality: average(checkedRecords.map((record) => record.detection.quality.quality)),
+    maxAltitudeM: round(input.maxAltitudeM, 1),
+    transitLengthM: route.transitLengthM,
+    captures: checkedRecords.length,
+  }
+
+  return {
+    id: `${route.id}-report`,
+    generatedAt: input.generatedAt,
+    detectorVersion: DETECTOR_VERSION,
+    sessionLabel: input.sessionLabel,
+    scenarioId: input.scenarioId,
+    lineLabel: line.label,
+    voltageKv: line.voltageKv,
+    routeLabel: route.label,
+    taskLabel: input.taskLabel,
+    status: input.status,
+    message: input.message,
+    startedAtS: round(input.startedAtS, 1),
+    finishedAtS: round(input.finishedAtS, 1),
+    durationS: round(Math.max(0, input.finishedAtS - input.startedAtS), 1),
+    towers,
+    records,
+    summary,
+  }
+}
+
+/** 报告里的报警清单(缺陷 + 疑似),按严重度再按塔号排 */
+export function alarmRecords(report: InspectionReport): InspectionRecord[] {
+  return report.records
+    .filter((record) => record.detection.verdict === 'defect' || record.detection.verdict === 'suspect')
+    .slice()
+    .sort((a, b) => {
+      const rank = (record: InspectionRecord): number => (record.detection.verdict === 'defect' ? 0 : 1)
+      return rank(a) - rank(b) || a.partId.localeCompare(b.partId)
+    })
+}
+
+/**
+ * 由航线与报告反推「任务该记录但没记录到的部位」。
+ * 任务失败/中止时,报告要显示「还剩哪些没拍」,而不是只报已完成的。
+ */
+export function missingParts(route: InspectionRoute, records: ReadonlyArray<InspectionRecord>): string[] {
+  const seen = new Set(records.filter((record) => record.outcome !== 'unchecked').map((record) => record.partId))
+  return route.parts.filter((part) => !seen.has(part.id)).map((part) => part.id)
+}
+
+// ————————————————————————————— 序列化 —————————————————————————————
+
+const OUTCOME_ORDER: ReadonlyArray<InspectionOutcome> = [
+  'truePositive',
+  'falsePositive',
+  'missed',
+  'trueNegative',
+  'unchecked',
+]
+
+export function reportToJson(report: InspectionReport): string {
+  return JSON.stringify(report, null, 2)
+}
+
+/** CSV 单元格:含逗号/引号/换行就加引号,引号翻倍 */
+function csvCell(value: string | number | null): string {
+  if (value === null) return ''
+  const text = String(value)
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+/**
+ * 明细 CSV:一行一个部位。
+ * 带 UTF-8 BOM —— 不带的话 Excel 打开中文列头会乱码,这份文件的第一个消费者就是人。
+ */
+export function reportToCsv(report: InspectionReport): string {
+  const header = [
+    '塔号',
+    '塔型',
+    '部位',
+    '部位类型',
+    '仿真时刻(s)',
+    '结论',
+    '缺陷类型',
+    '严重度',
+    '置信度',
+    '成像质量',
+    '特征像素',
+    '距离(m)',
+    '偏心(°)',
+    '俯仰(°)',
+    '机身偏差(°)',
+    '对账结果',
+    '地面真值',
+    '备注',
+  ]
+  const rows = report.records.map((record) => {
+    const observation = record.observation
+    return [
+      record.towerId,
+      TOWER_TYPE_LABELS[findTowerType(report, record.towerId)],
+      record.partLabel,
+      PART_KIND_LABELS[record.partKind],
+      record.simulationTime.toFixed(1),
+      verdictText(record),
+      record.detection.kind ?? '',
+      record.detection.severity ? SEVERITY_LABELS[record.detection.severity] : '',
+      record.detection.verdict === 'unchecked' ? '' : record.detection.confidence.toFixed(2),
+      record.detection.verdict === 'unchecked' ? '' : record.detection.quality.quality.toFixed(3),
+      record.detection.verdict === 'unchecked' ? '' : record.detection.quality.featurePixels,
+      observation ? observation.rangeM.toFixed(1) : '',
+      observation ? observation.offAxisDeg.toFixed(1) : '',
+      observation ? observation.tiltDeg.toFixed(1) : '',
+      observation ? observation.headingErrorDeg.toFixed(1) : '',
+      OUTCOME_LABELS[record.outcome],
+      record.truth ? `${SEVERITY_LABELS[record.truth.severity]}·${record.truth.kind}` : '无',
+      record.detection.note,
+    ]
+  })
+  return `\ufeff${[header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`
+}
+
+function findTowerType(report: InspectionReport, towerId: string): TowerType {
+  return report.towers.find((tower) => tower.towerId === towerId)?.towerType ?? 'suspension'
+}
+
+function verdictText(record: InspectionRecord): string {
+  return record.detection.verdict === 'unchecked' ? '未采集' : describeDetection(record.detection)
+}
+
+function percent(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value * 100)}%`
+}
+
+/** Markdown 巡检报告:给「贴到工单里」用的版本 */
+export function reportToMarkdown(report: InspectionReport): string {
+  const summary = report.summary
+  const lines: string[] = []
+  lines.push(`# 无人机巡检报告 · ${report.lineLabel}`)
+  lines.push('')
+  lines.push(`- 会话:${report.sessionLabel}(${report.scenarioId})`)
+  lines.push(`- 任务:${report.taskLabel}`)
+  lines.push(`- 航线:${report.routeLabel}`)
+  lines.push(`- 巡检状态:${report.status} —— ${report.message}`)
+  lines.push(`- 仿真时长:${report.durationS} s(生成于 ${report.generatedAt})`)
+  lines.push(`- 判定算法:${report.detectorVersion}`)
+  lines.push('')
+  lines.push('## 汇总')
+  lines.push('')
+  lines.push('| 指标 | 数值 |')
+  lines.push('| --- | --- |')
+  lines.push(`| 杆塔 | ${summary.towersInspected} / ${summary.towersTotal} 已检 |`)
+  lines.push(`| 部位覆盖 | ${summary.partsChecked} / ${summary.partsTotal}(${percent(summary.coverage)}) |`)
+  lines.push(`| 拍点 | ${summary.shotsTaken} / ${summary.shotsPlanned} |`)
+  lines.push(`| 报出缺陷 | ${summary.defectsReported} |`)
+  lines.push(`| 疑似待复核 | ${summary.suspects} |`)
+  lines.push(`| 真实缺陷 | ${summary.truthDefects} |`)
+  lines.push(`| 命中 / 漏检 / 误报 | ${summary.truePositive} / ${summary.missed} / ${summary.falsePositive} |`)
+  lines.push(`| 召回率 / 精度 | ${percent(summary.recall)} / ${percent(summary.precision)} |`)
+  lines.push(`| 平均成像质量 | ${summary.averageQuality === null ? '—' : summary.averageQuality.toFixed(3)} |`)
+  lines.push(`| 转场里程 / 最大高度 | ${summary.transitLengthM} m / ${summary.maxAltitudeM} m |`)
+  lines.push('')
+  lines.push('## 缺陷清单')
+  lines.push('')
+  const alarms = alarmRecords(report)
+  if (alarms.length === 0) {
+    lines.push('未发现缺陷或疑似缺陷。')
+  } else {
+    lines.push('| 塔号 | 部位 | 结论 | 置信度 | 备注 |')
+    lines.push('| --- | --- | --- | --- | --- |')
+    for (const record of alarms) {
+      lines.push(
+        `| ${record.towerId} | ${record.partLabel} | ${verdictText(record)} | ${record.detection.confidence.toFixed(2)} | ${record.detection.note} |`,
+      )
+    }
+  }
+  lines.push('')
+  lines.push('## 逐塔小结')
+  lines.push('')
+  lines.push('| 塔号 | 塔型 | 覆盖 | 缺陷 | 疑似 | 真实缺陷 | 平均成像质量 |')
+  lines.push('| --- | --- | --- | --- | --- | --- | --- |')
+  for (const tower of report.towers) {
+    lines.push(
+      `| ${tower.towerId} | ${tower.towerTypeLabel} | ${tower.partsChecked} / ${tower.partsTotal} | ${tower.defectsReported} | ${tower.suspects} | ${tower.truthDefects} | ${tower.averageQuality === null ? '—' : tower.averageQuality.toFixed(3)} |`,
+    )
+  }
+  lines.push('')
+  lines.push('> 「真实缺陷」一列是仿真世界的地面真值,仅用于对账召回/精度,不属于巡检结论。')
+  return `${lines.join('\n')}\n`
+}
+
+/** 汇总里各对账项的展示顺序(界面与导出共用) */
+export function outcomeBreakdown(report: InspectionReport): Array<{ outcome: InspectionOutcome; count: number }> {
+  return OUTCOME_ORDER.map((outcome) => ({
+    outcome,
+    count: report.records.filter((record) => record.outcome === outcome).length,
+  }))
+}

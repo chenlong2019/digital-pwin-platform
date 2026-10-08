@@ -20,10 +20,13 @@ const {
   telemetry,
   rendererInfo,
   obstacles,
+  wires,
   obstaclesVisible,
   axesVisible,
+  wiresVisible,
   setObstaclesVisible,
   setAxesVisible,
+  setWiresVisible,
   setTimeScale,
   setWeather,
   setWind,
@@ -128,6 +131,15 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
           <button :class="{ active: axesVisible }" @click="setAxesVisible(!axesVisible)">
             {{ axesVisible ? '隐藏坐标轴' : '显示坐标轴' }}
           </button>
+          <!-- 只有场景真的带导线时才出现(输电走廊有,普通沙盒没有)–纯视觉元素,不参与避障 -->
+          <button
+            v-if="wires && wires.length > 0"
+            :class="{ active: wiresVisible }"
+            data-testid="toggle-wires"
+            @click="setWiresVisible(!wiresVisible)"
+          >
+            {{ wiresVisible ? '隐藏导线' : '显示导线' }}
+          </button>
         </div>
       </div>
 
@@ -138,6 +150,10 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
           <div><dt>标识</dt><dd class="mono">{{ scenario.id }}</dd></div>
           <div><dt>确定性种子</dt><dd class="mono">{{ scenario.seed }}</dd></div>
           <div><dt>障碍物</dt><dd class="mono">{{ obstacles.length }} 个 AABB</dd></div>
+          <div v-if="wires && wires.length > 0">
+            <dt>导线</dt>
+            <dd class="mono">{{ wires.length }} 条(纯视觉,不参与避障)</dd>
+          </div>
           <div v-if="scenario.geofence">
             <dt>电子围栏</dt>
             <dd class="mono">

@@ -1,0 +1,20 @@
+{
+  "name": "@simulation/grid-inspection",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "电网巡检行业能力包:输电线路资产模型、巡检航线规划、巡检任务、缺陷判定与巡检报告",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/contracts": "*",
+    "@simulation/sandbox-core": "*",
+    "@simulation/simulation-core": "*"
+  }
+}
