@@ -19,6 +19,22 @@ export const CAR_MODEL_URL = '/models/2024_tesla_model_3_rigged.glb'
 /** 车长 4.72 m,真车 1:1 —— 归一化按「最大尺寸」即车长缩放 */
 export const CAR_SIZE_METERS = 4.72
 
+/**
+ * 出厂资产的车头朝向与世界约定的夹角。
+ *
+ * 实测:这台特斯拉的车头朝 **+Z**(大灯中心 z=+1.62、前轮 z=+1.46);尾灯 z=−2.12。
+ * 而本项目的世界约定是「航向 0° = 北 = −Z」—— 无人机模型正是如此(云台镜头 z=−7.77),
+ * 所以 drone-rig 里 `rotation.y = -heading` 直接成立,CarView 却差 180°。
+ *
+ * 少这一下会同时错四处,因为车体是被整体镜像的:
+ *   · 车身「倒着开」:前进时车尾朝前;
+ *   · 四轮**滚动方向**反向(轮轴是机体 local X,跟着一起被镜像);
+ *   · 上坡显示成下坡(俯仰发生在车体坐标系里);
+ *   · 右侧压坡显示成左侧压坡(侧倾同理)。
+ * 这四处症状是同一个根因,所以也只用这一个常量钉住。换模型先改它。
+ */
+export const CAR_ASSET_FACE_YAW_DEG = 180
+
 /** 门全开的转角(度) */
 const DOOR_OPEN_DEG = 58
 /** 后视镜全折的转角(度) */
@@ -114,6 +130,39 @@ function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value
 }
 
+/**
+ * 姿态 → 机体根节点的欧拉角。
+ *
+ * 抽成纯函数是为了让符号约定可被测试直接钉住(见 __tests__/vehicle-model-axis.spec.ts)——
+ * 这三行是全项目最容易写反的地方:
+ *   · 航向:正北 0°、顺时针增加,而 three 里绕 Y 正转是逆时针,故取负;
+ *   · 顺序 YXZ:先定航向,再压俯仰/侧倾,三轴不串扰;
+ *   · 俯仰/侧倾的正负号定义在**车体坐标系**里 —— 机体已被 CAR_ASSET_FACE_YAW_DEG 摆正,
+ *     所以「正俯仰 = 上坡/车头抬起」「正侧倾 = 车身右侧下沉」(与领域层一致)。
+ */
+export function bodyRotationFromPose(pose: AgentRenderView['pose']): THREE.Euler {
+  return new THREE.Euler(
+    degToRad(pose.pitchDeg),
+    -degToRad(pose.headingDeg),
+    -degToRad(pose.rollDeg),
+    'YXZ',
+  )
+}
+
+/**
+ * 领域层的转向角 → 转向节点的 local Y 转角。
+ *
+ * 两者的「正方向」相反,必须反号:
+ *   · 领域层沿用罗盘航向(0=北 90=东,顺时针为正),所以 steerDeg > 0 是**右转**;
+ *   · 而绕 +Y 的正向旋转在俯视图里是**逆时针**,落在车体坐标系里就是**左转**。
+ * 少这个负号,前轮会朝转弯的反方向指 —— 车身往左弯、轮子却往右撇。
+ */
+export function steerNodeYawDeg(steerDeg: number): number {
+  const clamped =
+    steerDeg > MAX_STEER_DEG ? MAX_STEER_DEG : steerDeg < -MAX_STEER_DEG ? -MAX_STEER_DEG : steerDeg
+  return -clamped
+}
+
 export class CarView implements BodyView {
   readonly model: THREE.Group
   readonly groundOffsetY: number
@@ -139,8 +188,16 @@ export class CarView implements BodyView {
 
   static async load(context: BodyLoadContext): Promise<CarView> {
     const gltf = await context.loader.loadAsync(context.url ?? CAR_MODEL_URL)
-    const model = gltf.scene
+
+    // 摆正资产朝向:位姿是写到 model.rotation 上的,所以这 180° 只能落在内层资源节点上,
+    // 外面再套一层壳专门承载位姿。门的开合、后视镜折叠、转向角都是绕 local Y 的旋转,
+    // 与父级的 Y 旋转可交换,因此不受这次摆正影响 —— 只有「前/后、左/右」被翻正。
+    const asset = gltf.scene
+    asset.rotation.y = degToRad(CAR_ASSET_FACE_YAW_DEG)
+
+    const model = new THREE.Group()
     model.name = 'Tesla Model 3'
+    model.add(asset)
     const groundOffsetY = normalizeModel(model, context.sizeMeters ?? CAR_SIZE_METERS)
     model.traverse((object) => {
       const mesh = object as THREE.Mesh
@@ -185,14 +242,7 @@ export class CarView implements BodyView {
     this.model.position.x = pose.x
     this.model.position.y = this.groundOffsetY + pose.y
     this.model.position.z = pose.z
-    // 与无人机的航向约定一致:正北 0°、顺时针增加,而 three 里绕 Y 正转是逆时针,故取负。
-    // 顺序用 YXZ:先定航向,再压俯仰/侧倾,避免三轴相互串扰。
-    this.model.rotation.set(
-      degToRad(pose.pitchDeg),
-      -degToRad(pose.headingDeg),
-      -degToRad(pose.rollDeg),
-      'YXZ',
-    )
+    this.model.rotation.copy(bodyRotationFromPose(pose))
 
     const parts = view.rig?.parts
     this.applyDoors(parts)
@@ -227,14 +277,14 @@ export class CarView implements BodyView {
    * 转向角由领域层给(已平滑),车轮自转是累计角,渲染层不再二次插值,否则会甩尾。
    */
   private applyWheels(parts: AgentPartChannel | undefined): void {
-    const steer = parts?.steer ?? 0
-    const clamped = steer > MAX_STEER_DEG ? MAX_STEER_DEG : steer < -MAX_STEER_DEG ? -MAX_STEER_DEG : steer
-    const steerRad = degToRad(clamped)
+    const steerRad = degToRad(steerNodeYawDeg(parts?.steer ?? 0))
     for (const id of STEER_NODES) {
       const node = this.nodes.get(id)
       if (node) node.rotation.y = steerRad
     }
 
+    // 轮子的自转轴是机体 local X(见节点契约「动画轴」表)。领域层前进时累加为正,
+    // 对应「轮顶朝车头方向走」—— 方向由机体摆正(CAR_ASSET_FACE_YAW_DEG)保证,这里不要翻号。
     const spinRad = degToRad(parts?.wheelSpin ?? 0)
     for (const id of WHEEL_NODES) {
       const node = this.nodes.get(id)
