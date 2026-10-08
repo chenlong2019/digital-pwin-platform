@@ -3,6 +3,7 @@ import type { AgentUpdateContext, Command, SandboxQuery } from '@simulation/cont
 import { PLATFORM_COMMAND, createCommand } from '@simulation/contracts'
 import type { VehicleAgentOptions } from '@simulation/vehicle-agent'
 import {
+  DEFAULT_VEHICLE_CONFIG,
   VEHICLE_COMMAND,
   VehicleAgent,
   projectVehicleRenderView,
@@ -101,6 +102,10 @@ describe('VehicleAgent · 行驶(自行车模型)', () => {
     agent.handleCommand(command(PLATFORM_COMMAND.move, { forward: 1, right: -1, up: 0, yawRate: 0 }))
     runFor(agent, 2)
 
+    // 前轮打死也不能越过物理限位 —— 显示在仪表上的角度必须说得通
+    expect(Math.abs(telemetryOf(agent).steerDeg)).toBeLessThanOrEqual(
+      DEFAULT_VEHICLE_CONFIG.maxSteerDeg,
+    )
     const telemetry = telemetryOf(agent)
     // 左转 = 朝西(-X)偏;如果实现把左右写反了,这里会立刻红
     expect(telemetry.positionX).toBeLessThan(-0.5)
