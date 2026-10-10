@@ -41,6 +41,9 @@ export default defineConfig({
   },
   server: {
     fs: { allow: [repoRoot, appDir] },
+
+    host: '0.0.0.0',
+    port: 45678,
   },
   optimizeDeps: {
     // workspace 包是源码直连,交给 Vite 编译,不要预打包
