@@ -13,8 +13,8 @@
  */
 import { computed } from 'vue'
 import { PLATFORM_COMMAND } from '@simulation/contracts'
-import type { DefectSeverity } from '@simulation/grid-inspection'
-import { PART_KIND_LABELS, TOWER_TYPE_LABELS } from '@simulation/grid-inspection'
+import type { DefectSeverity } from '@simulation/power-domain'
+import { PART_KIND_LABELS, TOWER_TYPE_LABELS } from '@simulation/power-domain'
 import { useGridSession } from '../simulation/injection'
 import { compassLabel, formatClock, formatMeters, formatNumber } from '../utils/format'
 
@@ -27,6 +27,10 @@ const {
   dwellSeconds,
   task,
   telemetry,
+  issues,
+  canRun,
+  disabledShotIds,
+  toggleShot,
   createInspectionTask,
   abortInspection,
   startTask,
@@ -44,6 +48,19 @@ const planLocked = computed(() => {
 })
 
 const canCreate = computed(() => !planLocked.value && !airborne.value)
+
+/**
+ * 预检查的展示口径(§13.4:校验失败必须指出具体字段/点位与修正方式)。
+ * `error` 拦住创建,`warning` 只提示 —— 界面上也要分开,不能糊成一句「校验失败」。
+ */
+const precheckState = computed(() => {
+  if (!canRun.value) return { label: `不可执行 · ${issues.value.filter((issue) => issue.severity === 'error').length} 项错误`, tone: 'tag tag--danger' }
+  if (issues.value.length > 0) return { label: `通过 · ${issues.value.length} 项提示`, tone: 'tag tag--warn' }
+  return { label: '校验通过', tone: 'tag tag--ok' }
+})
+
+/** 禁用了几条检查点 —— 这条会直接压低覆盖率上限,所以要在拍点清单上标出来 */
+const disabledCount = computed(() => disabledShotIds.value.length)
 
 const statusLabel = computed(() => {
   switch (task.value?.status) {
@@ -159,6 +176,7 @@ const shotRows = computed(() =>
     towerLabel: shot.towerLabel,
     label: shot.label,
     kinds: [...new Set(shot.parts.map((part) => PART_KIND_LABELS[part.kind]))].join(' / '),
+    enabled: shot.enabled,
   })),
 )
 
@@ -253,7 +271,36 @@ function createAndStart(): void {
         </p>
       </div>
 
-      <!-- ③ 进度与云台读数 -->
+      <!-- ③ 任务预检查:每条问题都带字段与修正方式,不能只给一句「校验失败」 -->
+      <div class="stack precheck">
+        <div class="row row--between">
+          <span class="field-label">任务预检查</span>
+          <span :class="precheckState.tone" data-testid="precheck-state">{{ precheckState.label }}</span>
+        </div>
+        <p v-if="issues.length === 0" class="hint" data-testid="precheck-clear">
+          资产、检查点、路线、起降点与采集配置均已通过。
+        </p>
+        <ul v-else class="issues" data-testid="precheck-issues">
+          <li
+            v-for="issue in issues"
+            :key="`${issue.code}-${issue.field}`"
+            class="issue"
+            :class="`issue--${issue.severity}`"
+            :data-testid="`precheck-${issue.code}`"
+          >
+            <span class="issue__head">
+              <span class="tag" :class="issue.severity === 'error' ? 'tag--danger' : 'tag--warn'">
+                {{ issue.severity === 'error' ? '错误' : '提示' }}
+              </span>
+              <span class="issue__field mono">{{ issue.field }}</span>
+            </span>
+            <span class="issue__message">{{ issue.message }}</span>
+            <span class="issue__fix hint">→ {{ issue.fix }}</span>
+          </li>
+        </ul>
+      </div>
+
+      <!-- ④ 进度与云台读数 -->
       <div class="stack progress">
         <div class="row row--between">
           <span class="field-label">当前阶段</span>
@@ -300,7 +347,7 @@ function createAndStart(): void {
       <div class="grid">
         <button
           class="primary"
-          :disabled="!canCreate"
+          :disabled="!canCreate || !canRun"
           data-testid="create-inspection"
           @click="createAndStart()"
         >
@@ -349,7 +396,7 @@ function createAndStart(): void {
         </p>
       </div>
 
-      <!-- ④ 塔清单 -->
+      <!-- ⑤ 塔清单 -->
       <div class="stack">
         <span class="field-label">逐塔情况</span>
         <div class="towers">
@@ -370,16 +417,32 @@ function createAndStart(): void {
         </p>
       </div>
 
-      <!-- 拍点清单 -->
+      <!-- 拍点清单:每一条都能单独禁用(§3.2)。禁用的点仍然计价在覆盖率里 -->
       <details class="shots">
-        <summary>航线拍点({{ shotRows.length }} 个)</summary>
+        <summary>
+          航线拍点({{ shotRows.length }} 个<span v-if="disabledCount > 0"> · 已禁用 {{ disabledCount }}</span>)
+        </summary>
         <div class="shots__list">
-          <div v-for="shot in shotRows" :key="shot.id" class="shot">
+          <div v-for="shot in shotRows" :key="shot.id" class="shot" :class="{ 'shot--off': !shot.enabled }">
+            <label class="shot__toggle">
+              <input
+                type="checkbox"
+                :checked="shot.enabled"
+                :disabled="planLocked"
+                :data-testid="`shot-toggle-${shot.id}`"
+                :aria-label="`启用 ${shot.id}`"
+                @change="toggleShot(shot.id)"
+              />
+            </label>
             <span class="shot__index mono">{{ shot.index }}</span>
             <span class="shot__label">{{ shot.label }}</span>
             <span class="shot__kinds hint">{{ shot.kinds }}</span>
           </div>
         </div>
+        <p class="hint">
+          禁用的检查点不飞、不采集,但它的部位仍然计入总数 —— 所以覆盖率会如实掉下来,
+          不会被悄悄算成「全覆盖」。
+        </p>
       </details>
     </div>
   </section>
@@ -483,6 +546,59 @@ function createAndStart(): void {
   border-top: 1px solid var(--border-soft);
 }
 
+.precheck {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.issues {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.issue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--panel-soft);
+  font-size: 11.5px;
+}
+
+.issue--error {
+  border-color: rgba(255, 111, 126, 0.4);
+  background: rgba(255, 111, 126, 0.07);
+}
+
+.issue--warning {
+  border-color: rgba(255, 196, 107, 0.32);
+  background: rgba(255, 196, 107, 0.06);
+}
+
+.issue__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.issue__field {
+  color: var(--text-dim);
+}
+
+.issue__message {
+  color: var(--text);
+}
+
+.issue__fix {
+  color: var(--accent);
+}
+
 .towers {
   display: flex;
   flex-direction: column;
@@ -539,6 +655,23 @@ function createAndStart(): void {
   align-items: baseline;
   gap: 7px;
   font-size: 11px;
+}
+
+.shot--off {
+  opacity: 0.5;
+}
+
+.shot__toggle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.shot__toggle input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .shot__index {

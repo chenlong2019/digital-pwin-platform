@@ -12,6 +12,7 @@ import { expect, test, type Page } from '@playwright/test'
  *   · 改镜头倍率会让「采集净时长」变、但不会让航线几何变 —— 倍率是作业方案,不是飞法;
  *   · 任务一启动,方案就锁定(改了会让界面与任务手里的航线对不上);
  *   · 报告在巡检途中就能看,状态标「巡检中(进度截面)」而不是假装已完成;
+ *   · 检查点按作业口径单独成表:被禁用的那条不飞、但如实显示「跳过」,不悄悄少一行;
  *   · 导出真的落盘,扩展名与内容都对得上。
  */
 
@@ -97,7 +98,7 @@ test('启动巡检:方案锁定、逐塔推进、报告途中就能看、导出�
 
   await openGrid(page)
 
-  // 时间倍率调到 4×:巡检在 1× 下要飞 340 秒仿真时间,浏览器里等不起。
+  // 时间倍率调到 4×:巡检在 1× 下要飞 370 秒仿真时间,浏览器里等不起。
   // 这不是「为了让测试过而调参」—— 固定步长下仿真时间与真实时间本就解耦,时间倍率是它的正常用法。
   await openTab(page, 'scene')
   await page.getByRole('button', { name: '4×' }).click()
@@ -166,6 +167,64 @@ test('启动巡检:方案锁定、逐塔推进、报告途中就能看、导出�
   await expect(page.getByTestId('inspection-rth')).toBeEnabled()
   await expect(page.getByTestId('inspection-land')).toBeEnabled()
   await expect(createButton).toBeDisabled()
+
+  expect(errors).toEqual([])
+})
+
+test('检查点:预检查放行合格方案,被禁用的点不飞但在报告里如实显示「跳过」', async ({ page }) => {
+  test.setTimeout(300_000)
+
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+
+  await openGrid(page)
+  await openTab(page, 'inspection')
+
+  // 默认方案一路通过预检查 —— 而且要说清「查过哪些东西」,不能只给一句绿色
+  await expect(page.getByTestId('precheck-state')).toHaveText('校验通过')
+  await expect(page.getByTestId('precheck-clear')).toContainText('起降点')
+  await expect(page.getByTestId('create-inspection')).toBeEnabled()
+
+  // 禁用一条检查点:预检查转成「提示」而不是「错误」—— 飞得通,只是覆盖率上限掉了
+  await page.getByText('航线拍点(24 个)').click()
+  await page.getByTestId('shot-toggle-T01/S1').uncheck()
+  await expect(page.getByTestId('precheck-state')).toHaveText('通过 · 1 项提示')
+  await expect(page.getByTestId('precheck-points-disabled')).toBeVisible()
+  await expect(page.getByTestId('create-inspection')).toBeEnabled()
+
+  // 禁用的是「飞不飞」,不是「算不算」:航线规模一个数都没变,部位仍计入分母
+  await expect(page.getByTestId('plan-scale')).toHaveText('24 / 66')
+  await expect(page.locator('.shot--off')).toHaveCount(1)
+
+  // 4× 跑完整场(1× 要 370 秒仿真时间,浏览器里等不起)
+  await openTab(page, 'scene')
+  await page.getByRole('button', { name: '4×' }).click()
+  await openTab(page, 'inspection')
+  await page.getByTestId('create-inspection').click()
+  // 任务一起方案就冻住 —— 否则界面上的航线与任务手里那份会对不上
+  await expect(page.getByTestId('shot-toggle-T01/S1')).toBeDisabled()
+
+  await openTab(page, 'report')
+  await expect(page.getByTestId('report-status')).toHaveText('已完成', { timeout: 240_000 })
+
+  // 24 个检查点一条不少:没有失败,恰好一条跳过,四类相加等于拍点数
+  const raw = await page.getByTestId('point-counts').innerText()
+  const counts = raw.split('/').map((part) => Number(part.trim()))
+  expect(counts).toHaveLength(4)
+  expect(counts[2], '不该有检查点判失败').toBe(0)
+  expect(counts[3], '被禁用的那一条应当判「跳过」').toBe(1)
+  expect(counts.reduce((sum, value) => sum + value, 0)).toBe(24)
+
+  // 被禁用的那一条要看得见原因,不是悄悄少一行
+  await expect(page.getByTestId('point-status-T01/S1')).toHaveText('跳过')
+  await expect(page.getByTestId('point-T01/S1')).toContainText('检查点已禁用')
+
+  // 检查点清单能单独导出(现场拿去排复拍用)
+  const [csv] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-points-csv').click(),
+  ])
+  expect(csv.suggestedFilename()).toMatch(/\.csv$/)
 
   expect(errors).toEqual([])
 })

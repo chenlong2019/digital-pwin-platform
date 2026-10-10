@@ -1,67 +1,44 @@
 /**
- * 巡检记录与报告 —— 把一场巡检变成一份能交付、能对账、能导出的东西。
+ * 巡检报告 —— 把一场巡检变成一份能交付、能对账、能导出的东西(§56 汇总、§61 导出)。
  *
- * 三件事在这里分开,各自有明确归属:
- *   · `InspectionRecord` —— **一个部位一次采集**的全部事实:位姿、观测几何、
- *     成像质量、结论,以及地面真值。真值只用于对账,巡检结论本身不含它。
- *   · `classifyOutcome` —— 结论与真值的对账:命中 / 误报 / 漏检 / 正确排除。
- *   · 汇总与序列化 —— 覆盖率、召回、精度、缺陷清单,以及 JSON / CSV / Markdown。
+ * 记录本身在 `point/inspection-point-result.ts`;这里只管**汇总与序列化**:
+ * 逐塔小结、全局汇总(覆盖率 / 召回 / 精度 / 缺陷清单),以及 JSON / CSV / Markdown。
+ * 两者分开,是因为报告只是记录的一种**读法** —— 同一批记录可以算成报告、算成评分、
+ * 也可以只拿来画一条曲线。
  *
- * 两个刻意的选择:
+ * 三个刻意的选择:
  *   ① **summary 不取墙钟**。`generatedAt` 由调用方注入 —— 包内取一次 `new Date()`
  *      就会让「同一次会话跑两遍得到同一份报告」这件事失效(README §75)。
  *   ② **分母为零时 recall / precision 给 null 而不是 1**。「没有真值缺陷」时谈召回率
  *      是没有意义的,给 100% 会让报告看起来比实际漂亮。显示成 `—` 才是诚实的。
+ *      这条口径下沉到了 `evaluation-core`(`metricRatio`)—— 因为它是**通则**,
+ *      不是电力巡检特有的。
+ *   ③ **航线只按「事实面」读**(见 `inspection-route-facts.ts`):报告不需要认识任务。
  */
-import type { Vec3 } from '@simulation/contracts'
-import type { GridLine, PartDefect, PartKind, TowerType, DefectSeverity } from './grid-assets'
-import { PART_KIND_LABELS, SEVERITY_LABELS, TOWER_TYPE_LABELS } from './grid-assets'
-import type { DetectionResult, DetectionVerdict, PartObservation } from './defect-detector'
-import { DETECTOR_VERSION, describeDetection } from './defect-detector'
-import type { InspectionRoute } from './inspection-route'
+import { metricAverage, metricRatio } from '@simulation/evaluation-core'
+import type { PowerLine, TowerType, DefectSeverity } from '@simulation/power-domain'
+import { PART_KIND_LABELS, SEVERITY_LABELS, TOWER_TYPE_LABELS } from '@simulation/power-domain'
+import { DETECTOR_VERSION, describeDetection } from '../metric/data-quality-metric'
+import type { InspectionOutcome, InspectionRecord } from '../point/inspection-point-result'
+import { OUTCOME_LABELS } from '../point/inspection-point-result'
+import type { InspectionPointResult } from '../point/point-status'
+import { POINT_STATUS_LABELS, derivePointResults, summarizePointStatuses } from '../point/point-status'
+import type { InspectionRouteFacts } from './inspection-route-facts'
 
-// ————————————————————————————— 记录 —————————————————————————————
+// ————————————————————————————— 数据来源 —————————————————————————————
 
-/** 结论与真值的对账结果。`suspect` 计入报警,所以它按「报警」参与 precision */
-export type InspectionOutcome = 'truePositive' | 'falsePositive' | 'missed' | 'trueNegative' | 'unchecked'
+/**
+ * 数据来源(§10 最后一句:报告必须明确数据来源,不能混淆)。
+ *
+ * 仿真的截图**不能**被标成真实相机影像(§7.1),人工录入的结论也不能算成算法输出。
+ * 所以它不是一句注释,而是报告里的一个字段 —— 导出后仍然在。
+ */
+export type DataSource = 'simulation' | 'device' | 'manual'
 
-export const OUTCOME_LABELS: Record<InspectionOutcome, string> = {
-  truePositive: '命中',
-  falsePositive: '误报',
-  missed: '漏检',
-  trueNegative: '正确排除',
-  unchecked: '未采集',
-}
-
-export interface InspectionRecord {
-  readonly shotId: string
-  readonly towerId: string
-  readonly towerLabel: string
-  /** 全局部位 id:`<塔号>/<部位 id>` */
-  readonly partId: string
-  readonly partLabel: string
-  readonly partKind: PartKind
-  /** 采集时刻的仿真时间(秒) */
-  readonly simulationTime: number
-  /** 采集瞬间的机体位置(世界系) */
-  readonly dronePosition: Vec3
-  /** 采集几何;未采集时为 null */
-  readonly observation: PartObservation | null
-  readonly detection: DetectionResult
-  /** 地面真值 —— 仅用于对账,不是巡检结论的一部分 */
-  readonly truth: PartDefect | null
-  readonly outcome: InspectionOutcome
-}
-
-/** 对账:报警 = 结论不是「正常」(疑似也算报警,因为现场要派人去看) */
-export function classifyOutcome(
-  verdict: DetectionVerdict,
-  truth: PartDefect | null,
-): InspectionOutcome {
-  if (verdict === 'unchecked') return 'unchecked'
-  const alarm = verdict !== 'ok'
-  if (alarm) return truth ? 'truePositive' : 'falsePositive'
-  return truth ? 'missed' : 'trueNegative'
+export const DATA_SOURCE_LABELS: Record<DataSource, string> = {
+  simulation: '仿真数据',
+  device: '真实设备数据',
+  manual: '人工录入',
 }
 
 // ————————————————————————————— 报告 —————————————————————————————
@@ -111,6 +88,12 @@ export interface InspectionSummary {
   readonly maxAltitudeM: number
   readonly transitLengthM: number
   readonly captures: number
+  /** 检查点四类终态统计(§5.3) */
+  readonly pointsPlanned: number
+  readonly pointsPassed: number
+  readonly pointsWarning: number
+  readonly pointsFailed: number
+  readonly pointsSkipped: number
 }
 
 export interface InspectionReport {
@@ -130,13 +113,18 @@ export interface InspectionReport {
   readonly startedAtS: number
   readonly finishedAtS: number
   readonly durationS: number
+  /** 数据来源(§10):仿真 / 真实设备 / 人工录入 */
+  readonly dataSource: DataSource
+  /** 检查点结果:逐点状态与六条检查(§5.1 / §5.2) */
+  readonly points: ReadonlyArray<InspectionPointResult>
   readonly towers: ReadonlyArray<TowerReport>
   readonly records: ReadonlyArray<InspectionRecord>
   readonly summary: InspectionSummary
 }
 
 export interface BuildReportInput {
-  readonly route: InspectionRoute
+  /** 航线的事实面 —— 直接传 `InspectionRoute` 即可,结构兼容(见 inspection-route-facts.ts) */
+  readonly route: InspectionRouteFacts
   readonly records: ReadonlyArray<InspectionRecord>
   readonly status: InspectionReport['status']
   readonly message: string
@@ -147,6 +135,8 @@ export interface BuildReportInput {
   readonly finishedAtS: number
   readonly maxAltitudeM: number
   readonly generatedAt: string
+  /** 数据来源,默认 `simulation`(仿真页产出的一定是仿真数据) */
+  readonly dataSource?: DataSource
 }
 
 function round(value: number, digits = 3): number {
@@ -154,22 +144,10 @@ function round(value: number, digits = 3): number {
   return Math.round(value * factor) / factor
 }
 
-function ratio(numerator: number, denominator: number): number | null {
-  if (denominator <= 0) return null
-  return round(numerator / denominator)
-}
-
-function average(values: ReadonlyArray<number>): number | null {
-  if (values.length === 0) return null
-  let total = 0
-  for (const value of values) total += value
-  return round(total / values.length)
-}
-
 /** 组装一份完整报告:逐塔小结 + 全局汇总。纯函数,可对同一批记录重复调用 */
 export function buildInspectionReport(input: BuildReportInput): InspectionReport {
   const { route, records } = input
-  const line: GridLine = route.line
+  const line: PowerLine = route.line
 
   const towers: TowerReport[] = line.towers.map((tower) => {
     const towerRecords = records.filter((record) => record.towerId === tower.id)
@@ -191,7 +169,7 @@ export function buildInspectionReport(input: BuildReportInput): InspectionReport
       towerTypeLabel: TOWER_TYPE_LABELS[tower.type],
       partsTotal: partsOfTower.length,
       partsChecked: checked.length,
-      coverage: ratio(checked.length, partsOfTower.length) ?? 0,
+      coverage: metricRatio(checked.length, partsOfTower.length) ?? 0,
       alarms: alarms.length,
       defectsReported: defectRecords.length,
       suspects: suspectRecords.length,
@@ -201,7 +179,7 @@ export function buildInspectionReport(input: BuildReportInput): InspectionReport
         : defectSeverities.length > 0
           ? 'minor'
           : null,
-      averageQuality: average(checked.map((record) => record.detection.quality.quality)),
+      averageQuality: metricAverage(checked.map((record) => record.detection.quality.quality)),
       maxTiltDeg: round(
         checked.reduce((worst, record) => Math.max(worst, Math.abs(record.observation?.tiltDeg ?? 0)), 0),
         1,
@@ -215,13 +193,17 @@ export function buildInspectionReport(input: BuildReportInput): InspectionReport
   const missed = checkedRecords.filter((record) => record.outcome === 'missed').length
   const trueNegative = checkedRecords.filter((record) => record.outcome === 'trueNegative').length
 
+  // 检查点结果:作业口径(§5.2)。它和对账口径(outcome)是两件事,并排放、不互顶
+  const points = derivePointResults(route, records)
+  const pointCounts = summarizePointStatuses(points)
+
   const summary: InspectionSummary = {
     towersTotal: line.towers.length,
     towersInspected: towers.filter((tower) => tower.partsChecked > 0).length,
     partsTotal: route.parts.length,
     partsChecked: checkedRecords.length,
     partsUnchecked: records.length - checkedRecords.length,
-    coverage: ratio(checkedRecords.length, route.parts.length) ?? 0,
+    coverage: metricRatio(checkedRecords.length, route.parts.length) ?? 0,
     shotsPlanned: route.shots.length,
     shotsTaken: new Set(records.filter((record) => record.outcome !== 'unchecked').map((record) => record.shotId)).size,
     alarms: checkedRecords.filter((record) => record.detection.verdict === 'suspect' || record.detection.verdict === 'defect')
@@ -233,12 +215,17 @@ export function buildInspectionReport(input: BuildReportInput): InspectionReport
     falsePositive,
     missed,
     trueNegative,
-    recall: ratio(truePositive, truePositive + missed),
-    precision: ratio(truePositive, truePositive + falsePositive),
-    averageQuality: average(checkedRecords.map((record) => record.detection.quality.quality)),
+    recall: metricRatio(truePositive, truePositive + missed),
+    precision: metricRatio(truePositive, truePositive + falsePositive),
+    averageQuality: metricAverage(checkedRecords.map((record) => record.detection.quality.quality)),
     maxAltitudeM: round(input.maxAltitudeM, 1),
     transitLengthM: route.transitLengthM,
     captures: checkedRecords.length,
+    pointsPlanned: pointCounts.planned,
+    pointsPassed: pointCounts.passed,
+    pointsWarning: pointCounts.warning,
+    pointsFailed: pointCounts.failed,
+    pointsSkipped: pointCounts.skipped,
   }
 
   return {
@@ -256,6 +243,8 @@ export function buildInspectionReport(input: BuildReportInput): InspectionReport
     startedAtS: round(input.startedAtS, 1),
     finishedAtS: round(input.finishedAtS, 1),
     durationS: round(Math.max(0, input.finishedAtS - input.startedAtS), 1),
+    dataSource: input.dataSource ?? 'simulation',
+    points,
     towers,
     records,
     summary,
@@ -277,7 +266,10 @@ export function alarmRecords(report: InspectionReport): InspectionRecord[] {
  * 由航线与报告反推「任务该记录但没记录到的部位」。
  * 任务失败/中止时,报告要显示「还剩哪些没拍」,而不是只报已完成的。
  */
-export function missingParts(route: InspectionRoute, records: ReadonlyArray<InspectionRecord>): string[] {
+export function missingParts(
+  route: InspectionRouteFacts,
+  records: ReadonlyArray<InspectionRecord>,
+): string[] {
   const seen = new Set(records.filter((record) => record.outcome !== 'unchecked').map((record) => record.partId))
   return route.parts.filter((part) => !seen.has(part.id)).map((part) => part.id)
 }
@@ -354,6 +346,29 @@ export function reportToCsv(report: InspectionReport): string {
   return `\ufeff${[header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`
 }
 
+/**
+ * 检查点 CSV:一行一个检查点。
+ * 与明细 CSV 分开 —— 一份回答「每个部位拍成什么样」,一份回答「每个检查点算不算成立」。
+ */
+export function reportPointsToCsv(report: InspectionReport): string {
+  const header = ['检查点', '杆塔', '标号', '启用', '状态', '通过条件', '未通过检查', '未通过原因', '证据数']
+  const rows = report.points.map((point) => {
+    const failed = point.checks.filter((check) => !check.ok)
+    return [
+      point.pointId,
+      point.towerId,
+      point.label,
+      point.enabled ? '是' : '否',
+      POINT_STATUS_LABELS[point.status],
+      `${point.checks.filter((check) => check.ok).length}/${point.checks.length}`,
+      failed.map((check) => check.label).join(' '),
+      point.problems.join('；'),
+      point.captureIds.length,
+    ]
+  })
+  return `\ufeff${[header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`
+}
+
 function findTowerType(report: InspectionReport, towerId: string): TowerType {
   return report.towers.find((tower) => tower.towerId === towerId)?.towerType ?? 'suspension'
 }
@@ -376,6 +391,7 @@ export function reportToMarkdown(report: InspectionReport): string {
   lines.push(`- 任务:${report.taskLabel}`)
   lines.push(`- 航线:${report.routeLabel}`)
   lines.push(`- 巡检状态:${report.status} —— ${report.message}`)
+  lines.push(`- 数据来源:${DATA_SOURCE_LABELS[report.dataSource]}(报告中的数值仅代表该来源)`)
   lines.push(`- 仿真时长:${report.durationS} s(生成于 ${report.generatedAt})`)
   lines.push(`- 判定算法:${report.detectorVersion}`)
   lines.push('')
@@ -386,6 +402,9 @@ export function reportToMarkdown(report: InspectionReport): string {
   lines.push(`| 杆塔 | ${summary.towersInspected} / ${summary.towersTotal} 已检 |`)
   lines.push(`| 部位覆盖 | ${summary.partsChecked} / ${summary.partsTotal}(${percent(summary.coverage)}) |`)
   lines.push(`| 拍点 | ${summary.shotsTaken} / ${summary.shotsPlanned} |`)
+  lines.push(
+    `| 检查点 通过 / 警告 / 失败 / 跳过 | ${summary.pointsPassed} / ${summary.pointsWarning} / ${summary.pointsFailed} / ${summary.pointsSkipped} |`,
+  )
   lines.push(`| 报出缺陷 | ${summary.defectsReported} |`)
   lines.push(`| 疑似待复核 | ${summary.suspects} |`)
   lines.push(`| 真实缺陷 | ${summary.truthDefects} |`)
@@ -393,6 +412,20 @@ export function reportToMarkdown(report: InspectionReport): string {
   lines.push(`| 召回率 / 精度 | ${percent(summary.recall)} / ${percent(summary.precision)} |`)
   lines.push(`| 平均成像质量 | ${summary.averageQuality === null ? '—' : summary.averageQuality.toFixed(3)} |`)
   lines.push(`| 转场里程 / 最大高度 | ${summary.transitLengthM} m / ${summary.maxAltitudeM} m |`)
+  lines.push('')
+  lines.push('## 检查点结果')
+  lines.push('')
+  if (report.points.length === 0) {
+    lines.push('本航线没有检查点。')
+  } else {
+    lines.push('| 检查点 | 标号 | 状态 | 未通过原因 |')
+    lines.push('| --- | --- | --- | --- |')
+    for (const point of report.points) {
+      lines.push(
+        `| ${point.pointId} | ${point.label} | ${POINT_STATUS_LABELS[point.status]} | ${point.problems.join(';') || '—'} |`,
+      )
+    }
+  }
   lines.push('')
   lines.push('## 缺陷清单')
   lines.push('')

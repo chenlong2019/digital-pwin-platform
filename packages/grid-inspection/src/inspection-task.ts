@@ -22,7 +22,8 @@
  *     最后在报告里如实显示「哪几个部位没拍到」。只有连续多个拍点失败才中止 ——
  *     真实作业里因为一阵风就放弃整条线路是不可接受的。
  *   · **进度按拍点计**:起飞/降落不算节点,巡检的完成度就是拍点数。
- *   · **不做检测**:判定全部交给 `defect-detector`,任务只负责「把可比的观测交给它」。
+ *   · **不做检测**:判定全部交给 `@simulation/power-evaluation` 的判定器,任务只负责
+ *     「把可比的观测交给它」。
  *     这样换检测算法(规则 → 视觉模型)不需要动飞行逻辑。
  */
 import type {
@@ -38,12 +39,10 @@ import type {
   Vec3,
 } from '@simulation/contracts'
 import { PLATFORM_COMMAND, createCommand, distance3 } from '@simulation/contracts'
-import type { GridLine, TowerAsset } from './grid-assets'
-import { truthFor } from './grid-assets'
-import type { PartObservation } from './defect-detector'
-import { detect } from './defect-detector'
-import type { InspectionRecord, InspectionReport } from './inspection-report'
-import { buildInspectionReport, classifyOutcome } from './inspection-report'
+import type { PowerLine, PowerTower } from '@simulation/power-domain'
+import { truthFor } from '@simulation/power-domain'
+import type { InspectionRecord, InspectionReport, PartObservation } from '@simulation/power-evaluation'
+import { buildInspectionReport, classifyOutcome, detect } from '@simulation/power-evaluation'
 import type { InspectionRoute, RouteShot } from './inspection-route'
 import { SEGMENT_TUNING, planApproach, planHeadingHold, planHold, planOrientation } from './flight-control'
 
@@ -71,12 +70,13 @@ export const INSPECTION_STAGE_LABELS: Record<InspectionStage, string> = {
 }
 
 /** 拍点未完成的原因 —— 报告里要能看出「是飞不到还是拍不清」 */
-export type SkipReason = 'transitTimeout' | 'alignTimeout' | 'aborted'
+export type SkipReason = 'transitTimeout' | 'alignTimeout' | 'aborted' | 'disabled'
 
 export const SKIP_REASON_LABELS: Record<SkipReason, string> = {
   transitTimeout: '转场超时,未能抵达拍点',
   alignTimeout: '对准超时,机身未能转到拍摄方位',
   aborted: '任务中止,该拍点未执行',
+  disabled: '检查点已禁用,未执行',
 }
 
 export interface GridInspectionTaskOptions {
@@ -398,6 +398,14 @@ export class GridInspectionTask implements Task {
       return
     }
 
+    // 被禁用的检查点不飞:直接记「未采集」跳过,而且**不算连续失败** ——
+    // 那是作业计划里的取舍,不是执行出了故障,不该把整场巡检拖进中止。
+    // 它的部位仍然留在航线里,所以覆盖率会如实掉下来(用例 B)。
+    if (!shot.enabled) {
+      this.skipShot(context, shot, 'disabled', position, { countAsSkip: false })
+      return
+    }
+
     const solution = planApproach({
       position,
       headingDeg,
@@ -589,7 +597,14 @@ export class GridInspectionTask implements Task {
   }
 
   /** 拍点未完成:把它的部位全部记为「未采集」,报告里才不会凭空多出覆盖率 */
-  private skipShot(context: TaskUpdateContext, shot: RouteShot, reason: SkipReason, position: Vec3): void {
+  private skipShot(
+    context: TaskUpdateContext,
+    shot: RouteShot,
+    reason: SkipReason,
+    position: Vec3,
+    options: { readonly countAsSkip?: boolean } = {},
+  ): void {
+    const countsAsSkip = options.countAsSkip ?? true
     const note = SKIP_REASON_LABELS[reason]
     for (const part of shot.parts) {
       this.records.push({
@@ -624,10 +639,11 @@ export class GridInspectionTask implements Task {
       })
     }
     this.skippedShots += 1
-    this.consecutiveSkips += 1
-    context.log('error', `${shot.label} ${note},该拍点 ${shot.parts.length} 个部位记为未采集`)
+    if (countsAsSkip) this.consecutiveSkips += 1
+    // 禁用是计划内的取舍,不该跟「飞不到」一样报错 —— 但它确实拉低了覆盖率
+    context.log(reason === 'disabled' ? 'warn' : 'error', `${shot.label} ${note},该拍点 ${shot.parts.length} 个部位记为未采集`)
 
-    if (this.consecutiveSkips >= this.tuning.maxConsecutiveSkips) {
+    if (countsAsSkip && this.consecutiveSkips >= this.tuning.maxConsecutiveSkips) {
       this.fail(
         context,
         `连续 ${this.consecutiveSkips} 个拍点未能完成(${note}),巡检中止:已采集 ${this.records.filter((record) => record.outcome !== 'unchecked').length} 个部位`,
@@ -696,8 +712,9 @@ export class GridInspectionTask implements Task {
 
     const metrics: Record<string, number> = {
       shotsTotal: this.route.shots.length,
-      shotsTaken: Math.min(this.shotIndex, this.route.shots.length),
+      shotsTaken: new Set(checked.map((record) => record.shotId)).size,
       shotsSkipped: this.skippedShots,
+      shotsDisabled: this.route.shots.filter((shot) => !shot.enabled).length,
       partsTotal: this.route.parts.length,
       partsChecked: checked.length,
       coverage: this.route.parts.length === 0 ? 0 : Number(((checked.length / this.route.parts.length) * 100).toFixed(1)),
@@ -767,8 +784,8 @@ export class GridInspectionTask implements Task {
 
   // ————————————————————————————— 工具 —————————————————————————————
 
-  private findTower(towerId: string): TowerAsset | undefined {
-    const line: GridLine = this.route.line
+  private findTower(towerId: string): PowerTower | undefined {
+    const line: PowerLine = this.route.line
     return line.towers.find((tower) => tower.id === towerId)
   }
 

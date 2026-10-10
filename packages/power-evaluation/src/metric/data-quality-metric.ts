@@ -1,5 +1,6 @@
 /**
- * 缺陷判定 —— 巡检的「传感器 + 算法」,也是整个功能唯一需要**说明白它是假的**的地方。
+ * 成像质量与缺陷判定(§53 `metric/data-quality-metric.ts`)—— 巡检的「传感器 + 算法」,
+ * 也是整个功能唯一需要**说明白它是假的**的地方。
  *
  * 真实系统里这一环是视觉大模型或人工看图;这里用确定性规则 + 成像质量模型代替。
  * 这么做的价值不在于「像真模型」,而在于它把两件事变成可验证的量:
@@ -10,14 +11,17 @@
  *   ② **漏检与误检**是按塔号 + 部位 + 会话种子派生出来的:**同一次会话跑两遍结果完全
  *      一样**(README §75),换个种子才变。于是报告里的召回率/精度是真指标,不是装饰。
  *
- * 判定只读资产、不写资产:真实缺陷在 `grid-assets.ts` 的地面真值里,这里产出的
+ * 判定只读资产、不写资产:真实缺陷在 `@simulation/power-domain` 的地面真值里,这里产出的
  * 是**巡检结论**。两者在报告里并列出现,是为了对账,不是为了糊弄 —— 界面上
  * 真值一律标注「仅用于对账」。
+ *
+ * `detect()` 与成像质量模型同处一个文件,是因为**判定就是成像质量的函数**:
+ * 把它挪到别的文件里,只会让人以为「判定」与「画质」是两件可以各自演进的事。
  */
 import type { WeatherKind } from '@simulation/contracts'
 import { createSeededRandom } from '@simulation/simulation-core'
-import type { DefectKind, DefectSeverity, PartDefect, PartKind } from './grid-assets'
-import { DEFECT_LABELS, SEVERITY_LABELS } from './grid-assets'
+import type { DefectKind, DefectSeverity, PartDefect, PartKind } from '@simulation/power-domain'
+import { DEFECT_LABELS, SEVERITY_LABELS } from '@simulation/power-domain'
 
 /** 检测器版本 —— 报告里要记,算法换了以后旧报告仍可追溯 */
 export const DETECTOR_VERSION = 'rule-v1'

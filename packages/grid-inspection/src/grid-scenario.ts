@@ -13,10 +13,14 @@
  * ⚠️ `ObstacleDefinition` 只有轴对齐盒(AABB),所以横担只在**线路走向与坐标轴
  * 平行**时生成;斜向线路会退化成省略横担(见 `armAxis`)。这是当前平台的已知边界,
  * 不是这里的取舍 —— 要支持斜向走廊得给 Sandbox 加旋转盒,属于契约层的扩展。
+ *
+ * ⚠️ 这一段**故意不在 `power-domain` 里**:资产台账只依赖 `contracts`(§84),
+ * 而「翻成 Sandbox 障碍物」要认识 `sandbox-core`。装配属于作业侧,等
+ * `grid-inspection` 收敛成 `power-mission` 时它会一起过去(§85 允许 mission 依赖 sandbox-core)。
  */
 import type { ObstacleDefinition, Scenario } from '@simulation/sandbox-core'
-import type { GridLine, TowerAsset } from './grid-assets'
-import { gridInspectionLine } from './grid-assets'
+import type { PowerLine, PowerTower } from '@simulation/power-domain'
+import { gridInspectionLine } from '@simulation/power-domain'
 
 /** 塔身根开(米):方形塔腿的外接尺寸 */
 const TOWER_BODY_WIDTH_M = 3.4
@@ -50,7 +54,7 @@ export function gridLaunchSite(): LaunchSite {
 }
 
 /** 塔的全高(米):最高横担再往上一个塔头 */
-export function towerTopAltitudeM(tower: TowerAsset): number {
+export function towerTopAltitudeM(tower: PowerTower): number {
   const levels = tower.armLevelsM
   const top = levels[levels.length - 1] ?? tower.bodyHeightM
   return top + TOWER_HEAD_RISE_M
@@ -62,14 +66,14 @@ export function towerTopAltitudeM(tower: TowerAsset): number {
  * 横担垂直于线路走向,所以线路南北向 → 横担沿 x;线路东西向 → 横担沿 z;
  * 斜向返回 null(退化为省略横担)。见文件头的已知边界说明。
  */
-function armAxis(line: GridLine): 'x' | 'z' | null {
+function armAxis(line: PowerLine): 'x' | 'z' | null {
   const bearing = ((line.bearingDeg % 180) + 180) % 180
   if (bearing < 1 || bearing > 179) return 'x'
   if (Math.abs(bearing - 90) < 1) return 'z'
   return null
 }
 
-function towerObstacles(tower: TowerAsset, line: GridLine): ObstacleDefinition[] {
+function towerObstacles(tower: PowerTower, line: PowerLine): ObstacleDefinition[] {
   const levels = tower.armLevelsM
   const top = towerTopAltitudeM(tower)
   const lowestLevel = levels[0] ?? tower.bodyHeightM
@@ -123,7 +127,7 @@ function towerObstacles(tower: TowerAsset, line: GridLine): ObstacleDefinition[]
 }
 
 export interface GridScenarioOptions {
-  readonly line?: GridLine
+  readonly line?: PowerLine
   readonly id?: string
   readonly label?: string
   /** 是否把杆塔构件做成实体障碍物(默认 true);false = 只保留变电站等场景件 */

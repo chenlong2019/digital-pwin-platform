@@ -12,20 +12,18 @@ import { computed, ref, watch } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type { Command, TaskId } from '@simulation/contracts'
 import { PLATFORM_COMMAND } from '@simulation/contracts'
-import type {
-  GridLine,
-  InspectionRecord,
-  InspectionReport,
-  InspectionRoute,
-} from '@simulation/grid-inspection'
+import type { PowerLine } from '@simulation/power-domain'
+import { conductorSpans, gridInspectionLine } from '@simulation/power-domain'
+import type { InspectionPointResult, InspectionRecord, InspectionReport } from '@simulation/power-evaluation'
+import type { InspectionRoute, MissionIssue } from '@simulation/grid-inspection'
 import {
   DEFAULT_DWELL_SECONDS,
   DEFAULT_LENS_ZOOM,
-  conductorSpans,
-  gridInspectionLine,
+  canRunMission,
   gridInspectionScenario,
   gridLaunchSite,
   planInspectionRoute,
+  validateMission,
 } from '@simulation/grid-inspection'
 import type { SceneWire } from '@simulation/three-adapter'
 import { conductorSpansToSceneWires } from './scene-mapping'
@@ -35,7 +33,7 @@ import { useSandboxSimulation } from './use-sandbox-simulation'
 
 export interface UseGridInspectionOptions {
   /** 线路台账;不传 = 内置的 220 kV 西岭线 */
-  readonly line?: GridLine
+  readonly line?: PowerLine
   /** 镜头倍率(全航线统一)。检测器按它算成像质量,相机也按它变焦 */
   readonly lensZoom?: number
   /** 单拍点悬停采集时长(秒) */
@@ -44,7 +42,7 @@ export interface UseGridInspectionOptions {
 
 export interface GridInspectionSession extends SandboxSimulation {
   /** 线路台账 */
-  readonly line: GridLine
+  readonly line: PowerLine
   /** 巡检航线(由台账 + 作业方案推导;改镜头倍率会重算) */
   readonly route: ComputedRef<InspectionRoute>
   /** 导线折线(纯视觉) */
@@ -54,10 +52,21 @@ export interface GridInspectionSession extends SandboxSimulation {
   /** 当前巡检报告 —— 巡检进行中拿到的是进度截面 */
   readonly report: ComputedRef<InspectionReport | null>
   readonly records: ComputedRef<ReadonlyArray<InspectionRecord>>
+  /** 检查点结果(§5.2 作业口径:通过 / 警告 / 失败 / 跳过);与对账结果分开 */
+  readonly points: ComputedRef<ReadonlyArray<InspectionPointResult>>
+  /** 任务预检查的问题清单(§3.2 / §13.4) */
+  readonly issues: ComputedRef<ReadonlyArray<MissionIssue>>
+  /** 预检查是否放行(有 error 就不放行) */
+  readonly canRun: ComputedRef<boolean>
+  /** 被禁用的检查点 id(§3.2:允许启用、禁用) */
+  readonly disabledShotIds: Ref<ReadonlyArray<string>>
   readonly lensZoom: Ref<number>
   readonly dwellSeconds: Ref<number>
 
-  /** 按当前方案创建巡检任务(不自动启动) */
+  /** 启用 / 禁用一个检查点(禁用后覆盖率不会再是 100%) */
+  toggleShot(pointId: string): void
+
+  /** 按当前方案创建巡检任务(不自动启动);预检查有 error 时返回 null */
   createInspectionTask(): TaskId | null
   /** 生成一份**此刻**的报告(导出用,时间是现取的) */
   buildReportNow(): InspectionReport | null
@@ -70,6 +79,9 @@ export function useGridInspection(options: UseGridInspectionOptions = {}): GridI
   const launch = gridLaunchSite()
   const lensZoom = ref(options.lensZoom ?? DEFAULT_LENS_ZOOM)
   const dwellSeconds = ref(options.dwellSeconds ?? DEFAULT_DWELL_SECONDS)
+  /** 被禁用的检查点(§3.2)。存在这里而不是存进航线里:航线是**推导出来的**,
+   *  存进去就得在两处同步,迟早对不上 */
+  const disabledShotIds = ref<ReadonlyArray<string>>([])
 
   const route = computed<InspectionRoute>(() =>
     planInspectionRoute(line, {
@@ -77,6 +89,7 @@ export function useGridInspection(options: UseGridInspectionOptions = {}): GridI
       dwellSeconds: dwellSeconds.value,
       // 起飞点必须与场景里的出生点一致,否则转场里程从一开始就是错的
       home: { x: launch.x, y: launch.y, z: launch.z },
+      disabledShotIds: disabledShotIds.value,
     }),
   )
   const wires = conductorSpansToSceneWires(conductorSpans(line))
@@ -130,8 +143,25 @@ export function useGridInspection(options: UseGridInspectionOptions = {}): GridI
 
   const records = computed<ReadonlyArray<InspectionRecord>>(() => report.value?.records ?? [])
 
+  /** 检查点结果由报告给出 —— 报告已经是「航线 + 记录」的汇总,不在这里再算一遍 */
+  const points = computed<ReadonlyArray<InspectionPointResult>>(() => report.value?.points ?? [])
+
+  /** 任务预检查:资产 / 检查点 / 路线 / 起降点 / 采集配置,全部给出可操作的修正方式 */
+  const issues = computed<ReadonlyArray<MissionIssue>>(() => validateMission({ route: route.value }))
+  const canRun = computed(() => canRunMission(issues.value))
+
+  function toggleShot(pointId: string): void {
+    const current = disabledShotIds.value
+    disabledShotIds.value = current.includes(pointId)
+      ? current.filter((id) => id !== pointId)
+      : [...current, pointId]
+  }
+
   function createInspectionTask(): TaskId | null {
     if (!plugin) return null
+    // §5.3:只有通过校验的任务才能进入 Ready。这不是界面上把按钮变灰 ——
+    // 按钮可用性只是提示,真正的拦截必须在这里
+    if (!canRun.value) return null
     // 报告时间戳在这一刻盖上:任务已经开始,后续每个 HUD tick 都取墙钟会让报告文字一直跳
     reportStamp.value = new Date().toISOString()
     const id = plugin.create()
@@ -166,8 +196,13 @@ export function useGridInspection(options: UseGridInspectionOptions = {}): GridI
     inspectionTaskId,
     report,
     records,
+    points,
+    issues,
+    canRun,
+    disabledShotIds,
     lensZoom,
     dwellSeconds,
+    toggleShot,
     createInspectionTask,
     buildReportNow,
     abortInspection,

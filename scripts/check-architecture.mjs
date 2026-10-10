@@ -25,13 +25,29 @@ const MANIFEST = {
   'agent-core': { layer: 'Core', allow: ['contracts', 'simulation-core'], dir: 'packages/agent-core' },
   'sandbox-core': { layer: 'Core', allow: ['contracts', 'simulation-core'], dir: 'packages/sandbox-core' },
 
+  // 通用评价契约(架构文档 §29):指标 / 评分 / 违规 / 评价结果。
+  // 放在 Core 层,因为它和 contracts 一样是「全层共用的词」—— 它不认识任何行业,
+  // 所以将来任何领域的评价都从这里取词,而它自己一行都不用改。
+  'evaluation-core': { layer: 'Core', allow: ['contracts'], dir: 'packages/evaluation-core' },
+
   'task-core': { layer: 'Capability', allow: ['contracts', 'simulation-core'], dir: 'packages/task-core' },
-  // 行业作业能力(不是载具):电网巡检的资产模型 / 航线规划 / 巡检任务 / 判定 / 报告。
+  // 行业作业能力(不是载具):电网巡检的航线规划 / 控制律 / 巡检任务 / 场景装配。
   // 落在 Capability 层、不依赖任何载体包 —— 换载具执行同一套巡检作业时它不用改。
+  // 资产台账在 `power-domain`(Domain,只依赖 contracts);判定与报告在
+  // `power-evaluation`(同为 Capability)—— 两边都是朝内依赖,不成环。
   'grid-inspection': {
     layer: 'Capability',
-    allow: ['contracts', 'sandbox-core', 'simulation-core'],
+    allow: ['contracts', 'power-domain', 'power-evaluation', 'sandbox-core', 'simulation-core'],
     dir: 'packages/grid-inspection',
+  },
+
+  // 行业评价能力:成像质量与判定 / 汇总与导出 / 作业评分与违规清单(§53–§56)。
+  // 只吃「数据」(报告与航线的事实面),不吃任务状态机,也不吃 SimulationRuntime ——
+  // 全是纯函数,所以它能在测试里对着一份造出来的报告直接跑(§54)。
+  'power-evaluation': {
+    layer: 'Capability',
+    allow: ['contracts', 'evaluation-core', 'result', 'power-domain', 'simulation-core'],
+    dir: 'packages/power-evaluation',
   },
   recorder: { layer: 'Capability', allow: ['contracts'], dir: 'packages/recorder' },
   result: { layer: 'Capability', allow: ['contracts', 'recorder'], dir: 'packages/result' },
@@ -39,6 +55,11 @@ const MANIFEST = {
   collaboration: { layer: 'Capability', allow: ['contracts'], dir: 'packages/collaboration' },
   realtime: { layer: 'Capability', allow: ['contracts'], dir: 'packages/realtime' },
   input: { layer: 'Capability', allow: ['contracts', 'domain-api'], dir: 'packages/input' },
+
+  // 电力领域模型(架构文档 §37–§40):线路 / 杆塔 / 检查部位 / 缺陷真值。
+  // 落在 Domain 层、**只依赖 contracts** —— 电网巡检的三个业务包(power-domain /
+  // power-mission / power-evaluation)共用它,而它自己不认识沙盒、任务与渲染。
+  'power-domain': { layer: 'Domain', allow: ['contracts'], dir: 'packages/power-domain' },
 
   'drone-agent': {
     layer: 'Domain',
@@ -70,6 +91,7 @@ const MANIFEST = {
       'sandbox-core',
       'task-core',
       'grid-inspection',
+      'power-evaluation',
       'recorder',
       'drone-agent',
       'vehicle-agent',

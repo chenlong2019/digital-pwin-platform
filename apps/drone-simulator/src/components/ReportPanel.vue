@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * ReportPanel —— 巡检报告面板:汇总、对账、缺陷清单、导出。
+ * ReportPanel —— 巡检报告面板:汇总、对账、缺陷清单、作业评价、导出。
  *
  * 这份面板有一条**必须守住的界线**:巡检结论与地面真值分开显示。
  *   · 结论区(汇总 / 缺陷清单 / 逐塔小结)—— 真实系统里能拿到的东西
@@ -9,18 +9,33 @@
  *
  * 导出走 `buildReportNow()` 而不是面板里算好的那份:导出的是**此刻**的报告,
  * 时间戳是现取的;面板里那份为了不每 tick 跳字,时间只在任务起止时更新。
+ *
+ * 「作业评价」那块是**纯函数算出来的**(`evaluateInspection`):指标口径与评分规则
+ * 都不在这里 —— 面板只负责把结果摆出来,所以换一套验收口径不用动这一页。
  */
 import { computed } from 'vue'
-import type { InspectionReport } from '@simulation/grid-inspection'
+import type { InspectionReport, PointStatus } from '@simulation/power-evaluation'
 import {
+  DATA_SOURCE_LABELS,
   OUTCOME_LABELS,
+  POINT_STATUS_LABELS,
   alarmRecords,
+  evaluateInspection,
   missingParts,
   outcomeBreakdown,
+  reportPointsToCsv,
   reportToCsv,
   reportToJson,
   reportToMarkdown,
-} from '@simulation/grid-inspection'
+} from '@simulation/power-evaluation'
+import type { Metric, ViolationSeverity } from '@simulation/evaluation-core'
+import {
+  EVALUATION_STATUS_LABELS,
+  SCORE_GRADE_LABELS,
+  VIOLATION_SEVERITY_LABELS,
+  formatMetricValue,
+  meetsTarget,
+} from '@simulation/evaluation-core'
 import { useGridSession } from '../simulation/injection'
 import { downloadBlob, timestampTag } from '../utils/download'
 import { formatClock, formatMeters, formatNumber } from '../utils/format'
@@ -51,6 +66,31 @@ const statusTone = computed(() => {
 
 const alarms = computed(() => (report.value ? alarmRecords(report.value) : []))
 
+/** 检查点结果(§5.2 作业口径)—— 与「对账」是两块,绝不混 */
+const points = computed(() => report.value?.points ?? [])
+
+const pointCounts = computed(() => ({
+  passed: points.value.filter((point) => point.status === 'passed').length,
+  warning: points.value.filter((point) => point.status === 'warning').length,
+  failed: points.value.filter((point) => point.status === 'failed').length,
+  skipped: points.value.filter((point) => point.status === 'skipped').length,
+}))
+
+function pointTone(status: PointStatus): string {
+  switch (status) {
+    case 'passed':
+      return 'tag--ok'
+    case 'warning':
+      return 'tag--warn'
+    case 'failed':
+      return 'tag--danger'
+    case 'skipped':
+      return 'tag--info'
+    default:
+      return ''
+  }
+}
+
 function percent(value: number | null): string {
   return value === null ? '—' : `${Math.round(value * 100)} %`
 }
@@ -60,12 +100,58 @@ const missing = computed(() => missingParts(route.value, records.value))
 
 const outcomeRows = computed(() => (report.value ? outcomeBreakdown(report.value) : []))
 
+/**
+ * 作业评价 —— 纯函数,拿面板这份报告直接算。
+ * 规则与口径都不在这里:指标在 `score/mission-score.ts`,违规在 `mission/inspection-evaluator.ts`。
+ */
+const evaluation = computed(() => (report.value ? evaluateInspection({ report: report.value }) : null))
+
+const evaluationTone = computed(() => {
+  switch (evaluation.value?.status) {
+    case 'passed':
+      return 'tag--ok'
+    case 'warning':
+      return 'tag--warn'
+    case 'failed':
+      return 'tag--danger'
+    default:
+      return ''
+  }
+})
+
+const SEVERITY_TONES: Record<ViolationSeverity, string> = {
+  critical: 'tag--danger',
+  major: 'tag--danger',
+  minor: 'tag--warn',
+  info: '',
+}
+
+function severityTone(severity: ViolationSeverity): string {
+  return SEVERITY_TONES[severity]
+}
+
+/** 评分显示成整数分:0.873 → 87 分。缺指标给「—」,不给 0 */
+function scoreText(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value * 100)} 分`
+}
+
+/** 指标达标与否 —— 三态,缺值或没设目标都显示「—」 */
+function targetState(metric: Metric): string {
+  const met = meetsTarget(metric)
+  return met === null ? '—' : met ? '达标' : '未达标'
+}
+
+function metricTone(metric: Metric): string {
+  const met = meetsTarget(metric)
+  return met === null ? '' : met ? 'tag--ok' : 'tag--warn'
+}
+
 /** 文件名里不能出现空格与间隔号,统一压成下划线 */
 function slug(text: string): string {
   return text.replace(/[^\w\u4e00-\u9fa5-]+/g, '_').replace(/^_+|_+$/g, '')
 }
 
-function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
+function exportReport(kind: 'json' | 'csv' | 'points' | 'markdown'): void {
   const fresh = buildReportNow()
   if (!fresh) return
   const base = `巡检报告_${slug(line.label)}_${timestampTag()}`
@@ -76,6 +162,14 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
   if (kind === 'csv') {
     // 带 BOM 的 CSV:这份文件的第一个消费者是 Excel
     downloadBlob(new Blob([reportToCsv(fresh)], { type: 'text/csv;charset=utf-8' }), `${base}.csv`)
+    return
+  }
+  if (kind === 'points') {
+    // 检查点清单单独一份:一行一个检查点,直接回答「哪个点没成立、为什么」
+    downloadBlob(
+      new Blob([reportPointsToCsv(fresh)], { type: 'text/csv;charset=utf-8' }),
+      `巡检检查点_${slug(line.label)}_${timestampTag()}.csv`,
+    )
     return
   }
   downloadBlob(new Blob([reportToMarkdown(fresh)], { type: 'text/markdown;charset=utf-8' }), `${base}.md`)
@@ -103,6 +197,11 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
           <span class="mono">{{ report.detectorVersion }}</span>
         </div>
 
+        <div class="row row--between hint">
+          <span>数据来源</span>
+          <span class="tag tag--info" data-testid="data-source">{{ DATA_SOURCE_LABELS[report.dataSource] }}</span>
+        </div>
+
         <!-- 结论汇总 -->
         <div class="stack">
           <span class="field-label">汇总</span>
@@ -121,6 +220,13 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
             <div class="metrics__row">
               <dt>拍点</dt>
               <dd class="mono">{{ report.summary.shotsTaken }} / {{ report.summary.shotsPlanned }}</dd>
+            </div>
+            <div class="metrics__row">
+              <dt>检查点 通过/警告/失败/跳过</dt>
+              <dd class="mono" data-testid="point-counts">
+                {{ report.summary.pointsPassed }} / {{ report.summary.pointsWarning }} /
+                {{ report.summary.pointsFailed }} / {{ report.summary.pointsSkipped }}
+              </dd>
             </div>
             <div class="metrics__row">
               <dt>报出缺陷</dt>
@@ -148,6 +254,38 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
             </div>
           </dl>
           <div class="hint">{{ report.message }}</div>
+        </div>
+
+        <!-- 检查点结果:作业口径(§5.2)—— 只看「这次采集成不成立」,不掺地面真值 -->
+        <div class="stack">
+          <div class="row row--between">
+            <span class="field-label">检查点结果</span>
+            <span class="hint mono" data-testid="point-counts-badge">
+              通过 {{ pointCounts.passed }} · 警告 {{ pointCounts.warning }} · 失败 {{ pointCounts.failed }} ·
+              跳过 {{ pointCounts.skipped }}
+            </span>
+          </div>
+          <p v-if="points.length === 0" class="hint">这条航线还没有检查点结果。</p>
+          <div v-else class="points">
+            <div v-for="point in points" :key="point.pointId" class="point" :data-testid="`point-${point.pointId}`">
+              <div class="row row--between">
+                <span class="mono point__id">{{ point.pointId }}</span>
+                <span class="tag" :class="pointTone(point.status)" :data-testid="`point-status-${point.pointId}`">
+                  {{ POINT_STATUS_LABELS[point.status] }}
+                </span>
+              </div>
+              <div class="point__label hint">{{ point.label }}</div>
+              <div v-if="point.problems.length > 0" class="point__problems">
+                <span v-for="(problem, index) in point.problems" :key="index" class="point__problem">
+                  {{ problem }}
+                </span>
+              </div>
+            </div>
+          </div>
+          <p class="hint">
+            这是<strong>作业口径</strong>:只看采集本身成不成立(到达 / 距离 / 航向 / 云台 / 数量 / 关联),
+            真实系统里也拿得到。它与下面的「对账」不是一回事 —— 对账要地面真值,现场没有。
+          </p>
         </div>
 
         <!-- 对账:只有仿真里才有真值可比 -->
@@ -179,6 +317,57 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
           <p class="hint">
             真值是仿真世界写在杆塔资产上的事实,现场拿不到 —— 所以这一块单独放着,不混进上面的巡检结论。
             分母为零时召回/精度显示「—」,不假装 100%。
+          </p>
+        </div>
+
+        <!-- 作业评价:指标 + 评分 + 违规清单(口径来自 evaluation-core,规则来自 power-evaluation) -->
+        <div v-if="evaluation" class="stack evaluation">
+          <div class="row row--between">
+            <span class="field-label">作业评价</span>
+            <span class="tag" :class="evaluationTone" data-testid="evaluation-status">
+              {{ EVALUATION_STATUS_LABELS[evaluation.status] }}
+            </span>
+          </div>
+          <dl class="metrics">
+            <div class="metrics__row">
+              <dt>作业评分</dt>
+              <dd class="mono">
+                {{ scoreText(evaluation.score.value) }}
+                <span class="hint">{{ SCORE_GRADE_LABELS[evaluation.score.grade] }}</span>
+              </dd>
+            </div>
+            <div v-for="metric in evaluation.metrics" :key="metric.key" class="metrics__row">
+              <dt>{{ metric.label }}</dt>
+              <dd class="mono">
+                {{ formatMetricValue(metric) }}
+                <span v-if="metric.target !== null" class="hint">
+                  / 目标 {{ formatMetricValue({ ...metric, value: metric.target }) }}
+                </span>
+                <span class="tag" :class="metricTone(metric)">{{ targetState(metric) }}</span>
+              </dd>
+            </div>
+          </dl>
+          <p v-if="evaluation.violations.length === 0" class="hint">
+            没有不合规项。评分与违规都按当前这套口径算 —— 巡检没跑完时状态是「未完成」,而不是「不通过」。
+          </p>
+          <div v-else class="alarms">
+            <div
+              v-for="(violation, index) in evaluation.violations"
+              :key="`${violation.rule}-${index}`"
+              class="alarm"
+            >
+              <div class="row row--between">
+                <span class="mono">{{ violation.rule }}</span>
+                <span class="tag" :class="severityTone(violation.severity)">
+                  {{ VIOLATION_SEVERITY_LABELS[violation.severity] }}
+                </span>
+              </div>
+              <div class="alarm__note">{{ violation.message }}</div>
+            </div>
+          </div>
+          <p class="hint">
+            缺数据的指标（例如没有真值缺陷时的召回率）不参与评分,权重会重算 ——
+            「不知道」不会被当成 0 分,也不会被当成满分。
           </p>
         </div>
 
@@ -256,9 +445,10 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
             <button data-testid="export-csv" @click="exportReport('csv')">CSV</button>
             <button class="primary" data-testid="export-markdown" @click="exportReport('markdown')">Markdown</button>
           </div>
+          <button data-testid="export-points-csv" @click="exportReport('points')">检查点清单 CSV</button>
           <p class="hint">
-            导出的是**此刻**的报告(重新取时间戳)。CSV 带 UTF-8 BOM,Excel 打开中文列头不乱码;
-            Markdown 那份是「贴进工单」用的。
+            导出的是<strong>此刻</strong>的报告(重新取时间戳)。CSV 带 UTF-8 BOM,Excel 打开中文列头不乱码;
+            Markdown 那份是「贴进工单」用的;检查点清单 CSV 一行一个检查点,直接回答「哪个点没成立、为什么」。
           </p>
         </div>
       </template>
@@ -296,6 +486,22 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
   background: rgba(255, 196, 107, 0.06);
   border: 1px solid rgba(255, 196, 107, 0.28);
   border-radius: 8px;
+}
+
+.evaluation {
+  padding: 8px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+/* 评价块里的指标一行一条:右侧要同时放「值 / 目标 / 达标与否」,两列会挤到换行 */
+.evaluation .metrics {
+  grid-template-columns: 1fr;
+}
+
+.evaluation dt {
+  white-space: nowrap;
 }
 
 .outcomes {
@@ -399,5 +605,44 @@ function exportReport(kind: 'json' | 'csv' | 'markdown'): void {
 
 .grid button {
   width: 100%;
+}
+
+.points {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.point {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  font-size: 11.5px;
+}
+
+.point__id {
+  color: var(--accent);
+}
+
+.point__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.point__problems {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.point__problem {
+  color: #ffc46b;
 }
 </style>

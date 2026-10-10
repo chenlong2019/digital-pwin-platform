@@ -5,7 +5,7 @@
  * 谁想画谁负责映射,所以这段转换不属于任何包 —— 换成 Cesium 时只需要换一个映射函数,
  * 渲染适配器和仿真都不动(README §64)。
  */
-import type { ConductorSpan } from '@simulation/grid-inspection'
+import type { ConductorSpan } from '@simulation/power-domain'
 import type { Scenario } from '@simulation/sandbox-core'
 import type { SceneObstacle, SceneWire } from '@simulation/three-adapter'
 

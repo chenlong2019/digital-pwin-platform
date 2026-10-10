@@ -14,9 +14,9 @@
  * 于是「一基塔几个拍点」是可以推演、可以单测的量,而不是飞完才知道。
  */
 import type { Vec3 } from '@simulation/contracts'
-import { headingToVector } from '@simulation/contracts'
-import type { GridLine, InspectionPart, PartKind, TowerAsset } from './grid-assets'
-import { PART_KIND_LABELS, deriveInspectionParts } from './grid-assets'
+import { distance3, headingToVector } from '@simulation/contracts'
+import type { PowerLine, InspectionPart, PartKind, PowerTower } from '@simulation/power-domain'
+import { PART_KIND_LABELS, deriveInspectionParts } from '@simulation/power-domain'
 
 /** 悬停点相对目标部位抬高的余量(米):略高一点、带个俯角,画面更像巡检实拍 */
 const HOVER_RISE_M = 1.5
@@ -25,6 +25,38 @@ export const DEFAULT_LENS_ZOOM = 2
 export const DEFAULT_DWELL_SECONDS = 2.4
 /** 爬升段高度(米):要高于最高的塔头,否则转场会撞塔 */
 export const DEFAULT_CRUISE_ALTITUDE_M = 32
+
+/**
+ * 检查点的**有效条件**(产品规格 §5.1)。
+ *
+ * 一个检查点不能只因为无人机路过附近就算成功 —— 到达、距离、航向、云台、
+ * 采集数量、证据关联,每一项都要能**独立解释失败原因**。所以这四个阈值不写死在
+ * 评价侧,而是随航线一起定下来:评价侧逐条对照,报告里就是六条可读的检查行。
+ */
+export interface InspectionRequirement {
+  /** 期望拍摄距离范围(米):[下限, 上限] */
+  readonly distanceRangeM: readonly [number, number]
+  /** 机身航向容差(度) */
+  readonly headingToleranceDeg: number
+  /** 云台/光轴偏心容差(度) */
+  readonly gimbalToleranceDeg: number
+  /** 所需采集证据数量(张) */
+  readonly captureCount: number
+}
+
+/** 距离余量(米):悬停保持本身就有 ±1.5 m 的容差,再留一点测量余量 */
+const DISTANCE_TOLERANCE_M = 2.5
+/** 航向容差(度):比任务的对准判定(默认 8°)略松,留出悬停期间的漂移 */
+const HEADING_TOLERANCE_DEG = 10
+/**
+ * 云台偏心容差(度)。
+ *
+ * 取 25° 而不是更小的值,是因为**一个拍点要同时拍下同侧的一组部位**:相机对准的是
+ * 这组部位的质心,组内离质心最远的那个部位天然就有十几度的偏心。取太紧会把
+ * 「正常的一站多拍」判成失败,那就不是校验而是噪声。广角端半视场约 41°,
+ * 25° 仍在画面内,所以这个数既真实又留了余量。
+ */
+const GIMBAL_TOLERANCE_DEG = 25
 
 /** 航线里的一个部位(已带塔号前缀的全局 id) */
 export interface RoutePart {
@@ -54,12 +86,19 @@ export interface RouteShot {
   readonly aim: Vec3
   /** 期望航向(罗盘,度):从悬停位看向杆塔 */
   readonly headingDeg: number
+  /** 本检查点的有效条件(§5.1) */
+  readonly requirement: InspectionRequirement
+  /**
+   * 是否执行。禁用的检查点**仍然留在 `parts` 里** —— 它没拍,所以覆盖率必须
+   * 小于 100%。把禁用的点从航线里删掉,报告就会把「少拍了一处」显示成「全覆盖」。
+   */
+  readonly enabled: boolean
 }
 
 export interface InspectionRoute {
   readonly id: string
   readonly label: string
-  readonly line: GridLine
+  readonly line: PowerLine
   /** 起飞点(世界系) */
   readonly home: Vec3
   readonly shots: ReadonlyArray<RouteShot>
@@ -83,6 +122,11 @@ export interface PlanRouteOptions {
   readonly cruiseAltitudeM?: number
   /** 起飞点,默认世界原点 */
   readonly home?: Vec3
+  /**
+   * 被禁用的检查点 id(产品规格 §3.2:允许启用、禁用、排序、删除巡检点)。
+   * 被禁用的点仍在航线与部位清单里,只是不飞、不采集。
+   */
+  readonly disabledShotIds?: ReadonlyArray<string>
 }
 
 function round2(value: number): number {
@@ -100,8 +144,9 @@ function viewKey(part: InspectionPart): string {
  * 分组用「首次出现顺序」而不是排序:部位清单本身的顺序就是现场作业顺序
  * (塔头 → 上层横担/绝缘子 → 下层 → 塔身 → 塔基),重排一次反而要额外解释。
  */
-export function planInspectionRoute(line: GridLine, options: PlanRouteOptions = {}): InspectionRoute {
+export function planInspectionRoute(line: PowerLine, options: PlanRouteOptions = {}): InspectionRoute {
   const home = options.home ?? { x: 0, y: 0, z: 0 }
+  const disabled = new Set(options.disabledShotIds ?? [])
   const shots: RouteShot[] = []
   const allParts: RoutePart[] = []
 
@@ -126,6 +171,7 @@ export function planInspectionRoute(line: GridLine, options: PlanRouteOptions = 
       const aim = centroid(parts.map((part) => part.target))
       const recipe = group[0]
       if (!recipe) continue
+      const shotId = `${tower.id}/S${shotIndex}`
       const direction = headingToVector(line.bearingDeg + recipe.viewAzimuthDeg)
       const hover: Vec3 = {
         x: round2(tower.x + direction.x * recipe.viewDistanceM),
@@ -133,7 +179,7 @@ export function planInspectionRoute(line: GridLine, options: PlanRouteOptions = 
         z: round2(tower.z + direction.z * recipe.viewDistanceM),
       }
       shots.push({
-        id: `${tower.id}/S${shotIndex}`,
+        id: shotId,
         towerId: tower.id,
         towerLabel: tower.label,
         label: `${tower.label} · ${describeShot(parts, recipe.viewAzimuthDeg, recipe.viewDistanceM)}`,
@@ -142,6 +188,10 @@ export function planInspectionRoute(line: GridLine, options: PlanRouteOptions = 
         aim,
         // 从悬停位看向杆塔的方向:悬停点由方位角定义,期望航向就是它的反向
         headingDeg: round2((line.bearingDeg + recipe.viewAzimuthDeg + 180) % 360),
+        // 有效条件按这一拍的**实际计划几何**现算 —— 悬停位到每个部位的真实距离
+        // 才是「该保持在哪」的判据;用配方的名义距离会把同拍点里离塔轴远的部位误判
+        requirement: requirementFor(parts, hover),
+        enabled: !disabled.has(shotId),
       })
     }
   }
@@ -156,12 +206,35 @@ export function planInspectionRoute(line: GridLine, options: PlanRouteOptions = 
     lensZoom: options.lensZoom ?? DEFAULT_LENS_ZOOM,
     dwellSeconds: options.dwellSeconds ?? DEFAULT_DWELL_SECONDS,
     cruiseAltitudeM: options.cruiseAltitudeM ?? DEFAULT_CRUISE_ALTITUDE_M,
-    transitLengthM: round2(transitLength(home, shots)),
+    // 禁用的检查点不会被飞到,所以不算进预估里程
+    transitLengthM: round2(transitLength(home, shots.filter((shot) => shot.enabled))),
+  }
+}
+
+/**
+ * 由这一拍的实际几何生成有效条件(§5.1)。
+ *
+ * 距离区间取「悬停位到组内各部位的实际距离」再上下放宽 —— 组内部位离悬停位
+ * 本来就有远近之差(横担比塔头远几米),一条窄区间会把正常的一站多拍判成失败。
+ * 判的是「有没有保持在计划机位」,不是「部位是不是刚好在配方距离上」。
+ */
+export function requirementFor(parts: ReadonlyArray<RoutePart>, hover: Vec3): InspectionRequirement {
+  const ranges = parts.map((part) => distance3(hover, part.target))
+  const min = ranges.length > 0 ? Math.min(...ranges) : 0
+  const max = ranges.length > 0 ? Math.max(...ranges) : 0
+  return {
+    distanceRangeM: [
+      round2(Math.max(0, min - DISTANCE_TOLERANCE_M)),
+      round2(max + DISTANCE_TOLERANCE_M),
+    ],
+    headingToleranceDeg: HEADING_TOLERANCE_DEG,
+    gimbalToleranceDeg: GIMBAL_TOLERANCE_DEG,
+    captureCount: 1,
   }
 }
 
 /** 按拍摄配方分组,保持首次出现顺序 */
-function groupParts(tower: TowerAsset, line: GridLine): InspectionPart[][] {
+function groupParts(tower: PowerTower, line: PowerLine): InspectionPart[][] {
   const groups = new Map<string, InspectionPart[]>()
   for (const part of deriveInspectionParts(tower, line)) {
     const key = viewKey(part)

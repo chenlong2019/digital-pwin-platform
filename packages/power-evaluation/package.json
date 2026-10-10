@@ -1,9 +1,9 @@
 {
-  "name": "@simulation/grid-inspection",
+  "name": "@simulation/power-evaluation",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "电网巡检行业能力包(作业侧):巡检航线规划、三段控制律、巡检任务与场景装配;判定与报告在 @simulation/power-evaluation",
+  "description": "电网巡检评价包:成像质量与缺陷判定 / 逐塔汇总与导出 / 作业评分与违规清单",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -14,9 +14,8 @@
   },
   "dependencies": {
     "@simulation/contracts": "*",
+    "@simulation/evaluation-core": "*",
     "@simulation/power-domain": "*",
-    "@simulation/power-evaluation": "*",
-    "@simulation/sandbox-core": "*",
     "@simulation/simulation-core": "*"
   }
 }

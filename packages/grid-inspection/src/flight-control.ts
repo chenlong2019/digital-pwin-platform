@@ -28,6 +28,17 @@ export const SEGMENT_TUNING = {
   altitudeFullScaleM: 2,
   /** 航向误差超过该角度就先转再走(度) */
   alignThresholdDeg: 45,
+  /**
+   * 接近段刹车距离(米):满舵水平速度全部刹停所需的水平距离。
+   *
+   * 载具 normal 挡是 12 m/s / 3.5 m/s²,按 v²/2a 算得约 20.6 米。之所以用 3.5 而不是
+   * 更大的刹车加速度:载具只有在杆量接近中位(< 0.06)时才切到 brakeAccel,而接近段
+   * 一路都在给前进杆,能吃到的就是 accel。
+   *
+   * 这个数决定「还剩多少米就必须收杆」—— 阈值给大了会冲着撞过去(实测 T01/S3 越过
+   * 悬停位 8.3 米,观测距离 23.1 米,直接判不合格),给小了会在半路爬行。
+   */
+  approachBrakeDistanceM: 20.6,
   /** 前方探测距离(米) */
   obstacleProbeM: 20,
   /** 飞越障碍物时在最高点之上留的余量(米) */
@@ -161,10 +172,28 @@ export function planApproach(input: ApproachInput): ApproachSolution {
 
   const yawRate = clamp(headingErrorDeg / SEGMENT_TUNING.yawFullScaleDeg, -1, 1)
   const aligned = Math.abs(headingErrorDeg) < SEGMENT_TUNING.alignThresholdDeg
+
+  // 接近速度不能只看「还剩多远」,还要看「刹不刹得住」。
+  //
+  // 只按距离比例给杆(距离/6)会一路满舵飞到很近才收杆,而载具带着十几米每秒的
+  // 速度进来,1.5 米的到达半径根本容不下 —— 越过后还要飞好几米才停,记录下来的
+  // 观测距离直接超标(实测 T01/S3 偏了 8.3 米 → 观测距离 23.1 米,要求 12.5~17.5)。
+  // 所以把杆量收成「按剩余距离恰好能刹停」的平方根曲线:
+  //
+  //     杆量 ≤ sqrt((剩余距离 − 到达半径) / 满舵刹车距离)
+  //
+  // 这条曲线在远距离依然是满舵(比距离比例还快),越近收得越狠,到半径处恰好归零。
+  // 取两者更严的一个,于是远距离行为不变、近距离不再冲。
+  const remainingM = Math.max(distanceM - input.arriveRadiusM, 0)
+  const approachStick = Math.min(
+    distanceM / SEGMENT_TUNING.forwardFullScaleM,
+    Math.sqrt(remainingM / SEGMENT_TUNING.approachBrakeDistanceM),
+  )
+
   return {
     command: {
       // 没对准就先原地转:航点飞行的手感就是这样,也能避免斜着切进航线
-      forward: aligned ? clamp(distanceM / SEGMENT_TUNING.forwardFullScaleM, 0, 1) : 0,
+      forward: aligned ? clamp(approachStick, 0, 1) : 0,
       right: 0,
       up: clamp(altitudeErrorM / SEGMENT_TUNING.altitudeFullScaleM, SEGMENT_TUNING.maxDescendCommand, 1),
       yawRate,

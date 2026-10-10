@@ -1,0 +1,18 @@
+{
+  "name": "@simulation/evaluation-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "通用评价契约:指标 / 评分 / 违规 / 评价结果。零行业知识,任何领域的「干得怎么样」都从这里取词",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/contracts": "*"
+  }
+}

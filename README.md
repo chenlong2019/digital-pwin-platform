@@ -57,6 +57,7 @@ packages/                各层能力包，按六层架构分层（§40）
   simulation-core/       仿真时钟与固定步长循环
   agent-core/            智能体基座与运行时
   sandbox-core/          沙盒：世界、物理、障碍物、场景
+  evaluation-core/       通用评价契约：指标 / 评分 / 违规 / 评价结果
   drone-agent/           无人机领域智能体（DJI Mini 4 Pro）
   vehicle-agent/         轮式载具领域智能体（自行车模型 / 挡位 / 车门车灯）
   task-core/             任务与航点
@@ -64,7 +65,9 @@ packages/                各层能力包，按六层架构分层（§40）
   result/                任务结果聚合：TaskResult / 统计 / 导出
   replay/                历史回放：时间轴 / 控制器 / 快照采样
   input/                 用户输入：键盘 / 摇杆 → InputIntent
-  grid-inspection/       电网巡检：资产台账 / 航线规划 / 巡检任务 / 缺陷判定 / 报告
+  power-domain/          电力领域模型：输电线路 / 杆塔 / 检查部位 / 缺陷真值
+  grid-inspection/       电网巡检（作业侧）：航线规划 / 控制律 / 巡检任务 / 场景装配
+  power-evaluation/      电网巡检（评价侧）：缺陷判定 / 报告汇总与导出 / 作业评分
   domain-api/            领域门面：外部唯一入口
   three-adapter/         渲染适配层（three.js 隔离在此）
 apps/
@@ -91,13 +94,13 @@ apps/
 （`src/__tests__/docs.spec.ts`）与架构守卫的包清单互相钉住：这里写「已落地」
 而目录不存在、或写「未实现」而目录已经出现，测试都会红。
 
-## 已落地（15 个包 + 1 个应用）
+## 已落地（17 个包 + 1 个应用）
 
 | 层 | 模块 |
 | --- | --- |
-| Core | `contracts` `simulation-core` `agent-core` `sandbox-core` |
-| Capability | `task-core` `recorder` `result` `replay` `input` `grid-inspection` |
-| Domain | `drone-agent` `vehicle-agent` |
+| Core | `contracts` `simulation-core` `agent-core` `sandbox-core` `evaluation-core` |
+| Capability | `task-core` `recorder` `result` `replay` `input` `grid-inspection` `power-evaluation` |
+| Domain | `drone-agent` `vehicle-agent` `power-domain` |
 | API | `domain-api` |
 | Adapter | `three-adapter` |
 | Application | `drone-simulator` |
@@ -177,23 +180,37 @@ apps/
 换上一份行业包，就跑完了从资产到交付物的全链。
 
 ```text
-grid-assets       资产台账与地面真值（缺陷藏在哪、部位长什么样）
+power-domain       资产台账与地面真值（缺陷藏在哪、部位长什么样）· 只依赖 contracts
      ↓
-inspection-route  航线规划：资产几何 → 拍点序列（Route，与 AgentTrack 相对）
+inspection-route   航线规划：资产几何 → 拍点序列（Route，与 AgentTrack 相对）
      ↓
-flight-control    三段控制律：飞过去 / 转机身 / 按住悬停位
+flight-control     三段控制律：飞过去 / 转机身 / 按住悬停位
      ↓
-inspection-task   GridInspectionTask：转场 → 对准 → 采集 → 落记录
+inspection-task    GridInspectionTask：转场 → 对准 → 采集 → 落记录
      ↓
-defect-detector   判定：成像质量模型 + 确定性漏检/误检
+detect             判定：成像质量模型 + 确定性漏检/误检
      ↓
-inspection-report 汇总与导出：覆盖率 / 召回 / 精度 / 缺陷清单（JSON · CSV · Markdown）
+inspection-report  汇总与导出：覆盖率 / 召回 / 精度 / 缺陷清单（JSON · CSV · Markdown）
+     ↓
+evaluateInspection 作业评价：指标 + 评分 + 违规清单（口径来自 evaluation-core）
 ```
 
-它落在 **Capability 层**，只依赖 `contracts` / `sandbox-core` / `simulation-core` ——
-**不依赖 `drone-agent`**。任务全程只发平台指令（`agent.takeOff` / `agent.move` /
-`agent.hover` / `agent.land` / `agent.aimAt`），所以今天挂在无人机上，明天换机器人
-沿线走，资产模型、检测器与报告一个字都不用改。
+这条链现在落在**三个**包上，边界按「谁需要认识什么」划：
+
+- `power-domain` —— **台账**：只依赖 `contracts`。它不认识沙盒、任务与渲染，
+  所以同一份台账既能喂给沙盒做避障，也能喂给渲染层画出来，而两边用同一批坐标。
+- `grid-inspection` —— **作业侧**：依赖 `contracts` / `power-domain` /
+  `power-evaluation` / `sandbox-core` / `simulation-core`，**不依赖 `drone-agent`**。
+  任务全程只发平台指令（`agent.takeOff` / `agent.move` / `agent.hover` /
+  `agent.land` / `agent.aimAt`），所以今天挂在无人机上，明天换机器人沿线走，
+  航线与任务换掉即可，台账、判定与报告一个字不用改。
+- `power-evaluation` —— **评价侧**：只用 `contracts` / `evaluation-core` /
+  `power-domain` / `simulation-core`（后者只取纯函数 `createSeededRandom`）。
+  它**不依赖任务、不依赖沙盒、不碰 Runtime** —— 全是纯函数，所以可以在测试里
+  对着一份造出来的报告直接跑，不用飞一遍。换一套评分口径不需要动飞行逻辑。
+
+评价用的那套词（指标 / 评分 / 违规 / 评价结果）不在业务包里，而在
+`evaluation-core` —— 它不认识任何行业，所以将来第二种行业的评价直接复用。
 
 几个刻意的取舍，都写在对应文件头里：
 

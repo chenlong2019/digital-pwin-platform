@@ -16,6 +16,8 @@
     "@simulation/agent-core": "*",
     "@simulation/contracts": "*",
     "@simulation/drone-agent": "*",
+    "@simulation/grid-inspection": "*",
+    "@simulation/power-evaluation": "*",
     "@simulation/recorder": "*",
     "@simulation/sandbox-core": "*",
     "@simulation/simulation-core": "*",

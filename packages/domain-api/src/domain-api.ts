@@ -51,7 +51,8 @@ import {
 } from '@simulation/vehicle-agent'
 import type { AgentTrack, RecorderStats } from '@simulation/recorder'
 import { SimulationRecorder } from '@simulation/recorder'
-import type { InspectionRecord, InspectionReport, InspectionRoute } from '@simulation/grid-inspection'
+import type { InspectionRecord, InspectionReport } from '@simulation/power-evaluation'
+import type { InspectionRoute } from '@simulation/grid-inspection'
 import { GridInspectionTask } from '@simulation/grid-inspection'
 
 // ————————————————————————————— Authority —————————————————————————————

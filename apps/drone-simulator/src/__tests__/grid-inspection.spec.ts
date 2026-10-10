@@ -10,6 +10,9 @@
  *   ④ 无头端到端 —— 真飞机跑一次,从起飞到落地到出报告
  *   ⑤ 起飞前提 —— 机体没上电 / 自检没过就启动时,任务等就绪并重发,不报与真实原因不符的超时
  *   ⑥ 报告     —— 汇总口径、分母为零的处理、JSON/CSV/Markdown 三种导出
+ *   ⑦ 作业评价 —— 指标口径、评分归一化、雾天必然降分、违规分档与状态四态
+ *   ⑧ 检查点   —— 作业口径的通过/警告/失败/跳过(与对账口径严格分开)、启用/禁用
+ *   ⑨ 预检查   —— 每条问题都带字段定位与修正方式,不能只说「校验失败」
  *
  * ④ 之所以敢断言「同种子得到同一份报告」,是因为仿真内核里没有 Math.random / Date.now
  * —— 连报告时间戳都是调用方注入的(README §75)。
@@ -20,29 +23,35 @@ import type { Vec3 } from '@simulation/contracts'
 import { SimulationDomainAPI } from '@simulation/domain-api'
 import type { AimSolution } from '@simulation/drone-agent'
 import { solveAim } from '@simulation/drone-agent'
-import type {
-  GridLine,
-  InspectionRecord,
-  InspectionReport,
-  PartObservation,
-} from '@simulation/grid-inspection'
+import type { PowerLine } from '@simulation/power-domain'
+import { gridInspectionLine } from '@simulation/power-domain'
+import type { InspectionRecord, InspectionReport, PartObservation } from '@simulation/power-evaluation'
 import {
-  DEFAULT_DWELL_SECONDS,
-  DEFAULT_LENS_ZOOM,
   alarmRecords,
   buildInspectionReport,
   classifyOutcome,
+  derivePointResults,
   detect,
-  gridInspectionLine,
-  gridInspectionScenario,
-  gridLaunchSite,
+  evaluateInspection,
   imagingQuality,
+  missionMetrics,
+  missionScore,
   missingParts,
   outcomeBreakdown,
-  planInspectionRoute,
+  reportPointsToCsv,
   reportToCsv,
   reportToJson,
   reportToMarkdown,
+  summarizePointStatuses,
+} from '@simulation/power-evaluation'
+import {
+  DEFAULT_DWELL_SECONDS,
+  DEFAULT_LENS_ZOOM,
+  canRunMission,
+  gridInspectionScenario,
+  gridLaunchSite,
+  planInspectionRoute,
+  validateMission,
 } from '@simulation/grid-inspection'
 import type { WeatherKind } from '@simulation/contracts'
 
@@ -341,6 +350,8 @@ interface InspectionRun {
 interface RunOptions {
   readonly lensZoom?: number
   readonly weather?: WeatherKind
+  /** 被禁用的检查点 id(§3.2)—— 禁用的点不飞,但部位仍计入总数 */
+  readonly disabledShotIds?: ReadonlyArray<string>
 }
 
 /**
@@ -355,6 +366,7 @@ function runInspection(options: RunOptions = {}): InspectionRun {
     home: { x: launch.x, y: launch.y, z: launch.z },
     lensZoom: options.lensZoom ?? DEFAULT_LENS_ZOOM,
     dwellSeconds: DEFAULT_DWELL_SECONDS,
+    disabledShotIds: options.disabledShotIds,
   })
 
   const session = new SimulationDomainAPI({
@@ -378,7 +390,8 @@ function runInspection(options: RunOptions = {}): InspectionRun {
   if (taskId === null) throw new Error('创建巡检任务失败')
   session.startTask(taskId)
 
-  // 基准工况约 340 s 仿真时长;预算给到 1 小时仿真时间,超了就是真的卡住了
+  // 基准工况约 370 s 仿真时长(接近段按刹车曲线收杆,比原先一路满舵慢约 9%);
+  // 预算给到 1 小时仿真时间,超了就是真的卡住了
   let elapsed = 0
   while (elapsed < 3600) {
     session.step(600)
@@ -625,7 +638,7 @@ describe('巡检报告', () => {
   })
 
   it('没有真值缺陷时,召回率与精度给 null 而不是 100%', () => {
-    const clean: GridLine = {
+    const clean: PowerLine = {
       ...gridInspectionLine(),
       towers: gridInspectionLine().towers.map((tower) => ({ ...tower, defects: [] })),
     }
@@ -681,5 +694,328 @@ describe('巡检报告', () => {
     expect(markdown).toContain('## 逐塔小结')
     expect(markdown).toContain('仅用于对账')
     expect(markdown).toContain(String(report.summary.partsTotal))
+  })
+})
+
+// ————————————————————————————— ⑦ 作业评价 —————————————————————————————
+
+describe('作业评价', () => {
+  it('四条指标直接取自报告汇总,不做二次口径', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    const metrics = missionMetrics(report)
+    expect(metrics.map((metric) => metric.key)).toEqual(['coverage', 'recall', 'precision', 'dataQuality'])
+
+    const at = (key: string): number | null | undefined => metrics.find((metric) => metric.key === key)?.value
+    expect(at('coverage')).toBe(report.summary.coverage)
+    expect(at('recall')).toBe(report.summary.recall)
+    expect(at('precision')).toBe(report.summary.precision)
+    expect(at('dataQuality')).toBe(report.summary.averageQuality)
+
+    // 每条都有达标线 —— 没设目标线的指标不参与评分,那样「总分」说不清分母
+    for (const metric of metrics) expect(metric.target, `${metric.key} 缺达标线`).not.toBeNull()
+  })
+
+  it('评分恒在 0~1、四项权重和为 1,且同一份报告永远同一个分', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    const score = missionScore(report)
+    expect(score.value).not.toBeNull()
+    expect(score.value ?? 0).toBeGreaterThan(0)
+    expect(score.value ?? 2).toBeLessThanOrEqual(1)
+    // 基准工况四项都有值 ⇒ 权重全参与
+    expect(score.weight).toBe(1)
+    for (const value of Object.values(score.byMetric)) {
+      expect(value).toBeGreaterThanOrEqual(0)
+      expect(value).toBeLessThanOrEqual(1)
+    }
+    expect(missionScore(report)).toEqual(score)
+  })
+
+  it('雾天评分必然低于晴天:掉的是召回与画质,不是随机抖动', () => {
+    const clear = missionScore(sharedRun({ weather: 'clear' }).report)
+    const fog = missionScore(sharedRun({ weather: 'fog' }).report)
+    expect(fog.value).not.toBeNull()
+    expect(clear.value).not.toBeNull()
+    expect(fog.value ?? 1).toBeLessThan(clear.value ?? 0)
+    expect(fog.byMetric.dataQuality ?? 1).toBeLessThan(clear.byMetric.dataQuality ?? 0)
+    // 4 条真值缺陷漏了至少 1 条 ⇒ 召回 ≤ 0.75,归一化后必然小于 1
+    expect(fog.byMetric.recall ?? 1).toBeLessThan(1)
+    // 覆盖率与天气无关:判不出来是判定的事,不是没拍到
+    expect(fog.byMetric.coverage).toBe(clear.byMetric.coverage)
+  })
+
+  it('评价结果可由报告复算:标识、生成时刻、指标与评分全部来自报告', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    const evaluation = evaluateInspection({ report })
+    expect(evaluation.subjectId).toBe(report.id)
+    expect(evaluation.evaluatorId).toBe('power-inspection')
+    expect(evaluation.generatedAtS).toBe(report.finishedAtS)
+    expect(evaluation.metrics).toEqual(missionMetrics(report))
+    expect(evaluation.score).toEqual(missionScore(report))
+
+    // 基准工况的四个数是可复算的:全覆盖 / 全召回 / 零误报 / 画质 0.89
+    //
+    // 画质随飞法变,这个数被改过一次:接近段原先一路满舵、冲过悬停位 8 米才停,
+    // 机体离塔比计划远,同一拍点内几个部位的偏心角反而被「拉小」,画质虚高到 0.917。
+    // 修好刹车曲线后机体停在计划位置上,画质落到 0.89 —— 掉的是虚高那一截。
+    expect(report.summary.averageQuality).toBe(0.89)
+    expect(evaluation.score).toEqual({
+      value: 1,
+      grade: 'good',
+      byMetric: { coverage: 1, recall: 1, precision: 1, dataQuality: 1 },
+      weight: 1,
+    })
+    // 四项全部达标 ⇒ 没有违规,状态「通过」
+    expect(evaluation.violations).toEqual([])
+    expect(evaluation.status).toBe('passed')
+  })
+
+  it('雾天的评价落下来:漏检一条 major,画质与误报各扣一分', () => {
+    const report = sharedRun({ weather: 'fog' }).report
+    const evaluation = evaluateInspection({ report })
+    expect(evaluation.score).toEqual({
+      value: 0.775,
+      grade: 'fair',
+      byMetric: { coverage: 1, recall: 0.833, precision: 0.375, dataQuality: 0.668 },
+      weight: 1,
+    })
+    expect(evaluation.status).toBe('failed')
+    expect(evaluation.violations.map((violation) => `${violation.rule}:${violation.severity}`)).toEqual([
+      'missed-defect:major',
+      'quality-gap:minor',
+      'precision-gap:minor',
+    ])
+  })
+
+  it('巡检途中取进度截面 ⇒ 「未完成」,不判「不通过」;覆盖缺口如实报出', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    const partial = {
+      ...report,
+      status: 'inProgress' as const,
+      summary: { ...report.summary, coverage: 0.3, partsUnchecked: 40 },
+    }
+    const evaluation = evaluateInspection({ report: partial })
+    expect(evaluation.status).toBe('incomplete')
+
+    const gap = evaluation.violations.find((violation) => violation.rule === 'coverage-gap')
+    // 3 成覆盖已经过了「补几个拍点」的量级,按 major 报
+    expect(gap?.severity).toBe('major')
+    expect(gap?.message).toContain('40')
+  })
+
+  it('漏检逐条报成 major 且带部位与位置 —— 现场最需要立刻知道的就是这一条', () => {
+    const report = sharedRun({ weather: 'fog' }).report
+    const evaluation = evaluateInspection({ report })
+    const missed = report.records.filter((record) => record.outcome === 'missed')
+    expect(missed.length).toBeGreaterThan(0)
+
+    const rules = evaluation.violations.filter((violation) => violation.rule === 'missed-defect')
+    expect(rules).toHaveLength(missed.length)
+    for (const violation of rules) {
+      expect(violation.severity).toBe('major')
+      expect(violation.ref).not.toBeNull()
+      expect(violation.at).not.toBeNull()
+      expect(violation.message).toContain('漏检')
+    }
+
+    // 违规清单从重到轻 —— 报告与界面共用同一个顺序
+    const rank = (severity: string): number =>
+      severity === 'critical' ? 3 : severity === 'major' ? 2 : severity === 'minor' ? 1 : 0
+    const ranks = evaluation.violations.map((violation) => rank(violation.severity))
+    expect(ranks).toEqual(ranks.slice().sort((a, b) => b - a))
+  })
+})
+
+// ————————————————————————————— ⑧ 检查点状态与启用/禁用 —————————————————————————————
+
+describe('检查点状态(产品规格 §5.1 / §5.2)', () => {
+  it('基准工况:24 个检查点全部拍到,通过 23 / 警告 1 —— 没有失败也没有跳过', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    expect(report.points).toHaveLength(report.summary.shotsPlanned)
+    expect(summarizePointStatuses(report.points)).toEqual({
+      planned: report.summary.shotsPlanned,
+      passed: report.summary.pointsPassed,
+      warning: report.summary.pointsWarning,
+      failed: report.summary.pointsFailed,
+      skipped: report.summary.pointsSkipped,
+    })
+    expect(report.summary.pointsFailed).toBe(0)
+    expect(report.summary.pointsSkipped).toBe(0)
+    expect(report.summary.pointsPassed + report.summary.pointsWarning).toBe(report.summary.shotsPlanned)
+
+    // 唯一的警告是 T05/S3 的 ins-2-b:它没有真值缺陷,但这一拍点内两个绝缘子相隔
+    // 21.3°,成像质量 0.78,判定器的假警概率 (1−0.78)×0.18 恰好命中该部位的种子。
+    // 这正是 §5.2 要的语义 —— 六条检查条条成立(拍到了、距离对、航向对、云台在容差内、
+    // 证据齐全),所以不是「失败」;但结论里带着一个「疑似」,所以也不能算「通过」。
+    const warned = report.points.filter((point) => point.status === 'warning')
+    expect(warned.map((point) => point.pointId)).toEqual(['T05/S3'])
+    expect(warned[0]?.checks.every((check) => check.ok)).toBe(true)
+    expect(warned[0]?.problems).toEqual([])
+  })
+
+  it('基准工况:没有任何检查点因为「飞不到 / 拍不清」被判失败', () => {
+    // 这条是飞行侧的护栏:接近段一旦刹不住,机体就会冲过悬停位,观测距离超出要求,
+    // 检查点成片判失败(实测过 6 个 S3 拍点偏 8.3 米)。断言的是**六条检查同时成立**,
+    // 而不是某个笼统的「成功」。
+    const report = sharedRun({ weather: 'clear' }).report
+    for (const point of report.points) {
+      expect(point.status, `${point.pointId} 未拍到`).not.toBe('failed')
+      if (point.status === 'skipped') continue
+      for (const check of point.checks) {
+        expect(check.ok, `${point.pointId} ${check.label}:${check.detail}`).toBe(true)
+      }
+    }
+  })
+
+  it('逐点结果可由航线与记录直接推导 —— 报告里的那份不是另算的', () => {
+    const run = sharedRun({ weather: 'clear' })
+    const route = planInspectionRoute(gridInspectionLine(), { home: gridLaunchSite() })
+    expect(derivePointResults(route, run.report.records)).toEqual(run.report.points)
+  })
+
+  it('每条检查点结果都带六条独立检查,失败原因写成可读整句', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    const point = report.points[0]
+    expect(point?.checks.map((check) => check.kind)).toEqual([
+      'arrival',
+      'distance',
+      'heading',
+      'gimbal',
+      'capture',
+      'link',
+    ])
+    for (const check of point?.checks ?? []) {
+      expect(check.label.length).toBeGreaterThan(0)
+      expect(check.detail.length).toBeGreaterThan(0)
+    }
+    expect(point?.captureIds.length).toBeGreaterThan(0)
+    // 全部通过的点不该带任何「未通过原因」
+    expect(point?.problems).toEqual([])
+    expect(point?.checks.every((check) => check.ok)).toBe(true)
+  })
+
+  it('检查点 CSV 一行一个检查点,列头是中文', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    const csv = reportPointsToCsv(report)
+    const rows = csv.trim().split('\r\n')
+    expect(rows).toHaveLength(report.points.length + 1)
+    expect(rows[0]?.replace('\ufeff', '')).toContain('检查点')
+  })
+
+  it('Markdown 报告写明数据来源与检查点结果(§10 不能混淆来源)', () => {
+    const report = sharedRun({ weather: 'clear' }).report
+    const markdown = reportToMarkdown(report)
+    expect(markdown).toContain('数据来源:仿真数据')
+    expect(markdown).toContain('## 检查点结果')
+  })
+
+  it('禁用一个检查点:它判「跳过」、不被飞到,但部位仍计入总数', () => {
+    const line = gridInspectionLine()
+    const launch = gridLaunchSite()
+    const full = planInspectionRoute(line, { home: launch })
+    const disabledId = full.shots[2]?.id ?? ''
+    const plan = planInspectionRoute(line, { home: launch, disabledShotIds: [disabledId] })
+
+    expect(plan.shots.find((shot) => shot.id === disabledId)?.enabled).toBe(false)
+    // 航线与部位清单一条不少 —— 覆盖率没被悄悄抬高
+    expect(plan.shots).toHaveLength(full.shots.length)
+    expect(plan.parts).toHaveLength(full.parts.length)
+    // 也不会被飞到,所以预估里程变小
+    expect(plan.transitLengthM).toBeLessThan(full.transitLengthM)
+  })
+
+  it('无头跑一次带禁用点的巡检:状态是「跳过」,覆盖率必然小于 100%', () => {
+    const line = gridInspectionLine()
+    const launch = gridLaunchSite()
+    const planned = planInspectionRoute(line, { home: launch })
+    const disabledId = planned.shots[2]?.id ?? ''
+    const disabledParts = planned.shots.find((shot) => shot.id === disabledId)?.parts.length ?? 0
+
+    const run = sharedRun({ weather: 'clear', disabledShotIds: [disabledId] })
+    const point = run.report.points.find((entry) => entry.pointId === disabledId)
+    expect(point?.status).toBe('skipped')
+    expect(point?.problems.join()).toContain('禁用')
+    expect(run.report.summary.pointsSkipped).toBeGreaterThanOrEqual(1)
+    expect(run.report.summary.coverage).toBeLessThan(1)
+    expect(run.report.summary.partsUnchecked).toBeGreaterThanOrEqual(disabledParts)
+  })
+
+  it('禁用的点排在队首时,后面那条长腿照常飞抵 —— 避障读数按世界坐标对齐', () => {
+    // 回归护栏。禁掉第一个拍点会凭空造出一条长腿:机体从起飞点 (34,0,70) 直接飞去
+    // T01/S2 的悬停位 (0,13.85,26),水平 55.6 米。
+    //
+    // 这条腿曾经走不完 —— 不是飞得慢,是被自己的避障刹停了:DroneSim 的 position 是
+    // 「以起飞点为原点」的局部坐标,而障碍盒直接按世界坐标塞进了仿真,于是机体在
+    // 世界 (33.7,14,69.7) —— 离所有杆塔 30 米开外 —— 被判「贴着障碍物」,一路
+    // 0.14 m/s 爬行 50 秒,最后 T01/S2 以「转场超时」判失败。沙盒场景的机体出生在
+    // 世界原点、平移量为零,所以这个错位只在巡检场景里露得出来。
+    const run = sharedRun({ weather: 'clear', disabledShotIds: ['T01/S1'] })
+
+    expect(run.status).toBe('completed')
+    expect(run.report.points.find((point) => point.pointId === 'T01/S1')?.status).toBe('skipped')
+
+    const next = run.report.points.find((point) => point.pointId === 'T01/S2')
+    expect(next?.status, `T01/S2:${(next?.problems ?? []).join('/')}`).toBe('passed')
+    expect(next?.checks.every((check) => check.ok)).toBe(true)
+    // 被禁用的那一条是计划内取舍,不该带出第二个失败点
+    expect(run.report.summary.pointsFailed).toBe(0)
+  })
+})
+
+// ————————————————————————————— ⑨ 任务预检查 —————————————————————————————
+
+describe('任务预检查(产品规格 §3.2 / §13.4)', () => {
+  const line = gridInspectionLine()
+  const launch = gridLaunchSite()
+
+  it('合格航线零问题', () => {
+    const issues = validateMission({ route: planInspectionRoute(line, { home: launch }) })
+    expect(issues).toEqual([])
+    expect(canRunMission(issues)).toBe(true)
+  })
+
+  it('没有杆塔 ⇒ 报「资产不存在」,并说明怎么补', () => {
+    const empty = { ...line, towers: [] }
+    const issues = validateMission({ route: planInspectionRoute(empty, { home: launch }) })
+    const issue = issues.find((entry) => entry.code === 'no-assets')
+    expect(issue?.severity).toBe('error')
+    expect(issue?.field).toContain('台账')
+    expect((issue?.fix ?? '').length).toBeGreaterThan(0)
+    expect(canRunMission(issues)).toBe(false)
+  })
+
+  it('未设起飞点 ⇒ error;起飞点贴着杆塔 ⇒ warning 且说清距离', () => {
+    const route = planInspectionRoute(line, { home: launch })
+    expect(validateMission({ route, home: null }).find((entry) => entry.code === 'no-home')?.severity).toBe('error')
+
+    const first = line.towers[0]
+    const close = validateMission({ route, home: { x: first?.x ?? 0, y: 0, z: (first?.z ?? 0) + 5 } })
+    const warn = close.find((entry) => entry.code === 'home-too-close')
+    expect(warn?.severity).toBe('warning')
+    expect(warn?.field).toBe('巡航线.home')
+  })
+
+  it('禁用了检查点 ⇒ 提示覆盖率上限,但放行(是 warning 不是 error)', () => {
+    const base = planInspectionRoute(line, { home: launch })
+    const disabledId = base.shots[0]?.id ?? ''
+    const issues = validateMission({ route: planInspectionRoute(line, { home: launch, disabledShotIds: [disabledId] }) })
+    const warn = issues.find((entry) => entry.code === 'points-disabled')
+    expect(warn?.severity).toBe('warning')
+    expect(warn?.message).toContain(disabledId)
+    expect(canRunMission(issues)).toBe(true)
+  })
+
+  it('转场高度压不过塔头 ⇒ error,并给出该提到多少', () => {
+    const issues = validateMission({ route: planInspectionRoute(line, { home: launch, cruiseAltitudeM: 12 }) })
+    const issue = issues.find((entry) => entry.code === 'cruise-too-low')
+    expect(issue?.severity).toBe('error')
+    expect(issue?.field).toContain('cruiseAltitudeM')
+    expect(issue?.fix).toMatch(/\d/)
+  })
+
+  it('镜头倍率非法 ⇒ error 且定位到作业方案字段', () => {
+    const issues = validateMission({ route: planInspectionRoute(line, { home: launch, lensZoom: 0 }) })
+    const issue = issues.find((entry) => entry.code === 'bad-lens-zoom')
+    expect(issue?.severity).toBe('error')
+    expect(issue?.field).toBe('作业方案.lensZoom')
   })
 })

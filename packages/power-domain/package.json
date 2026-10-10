@@ -1,0 +1,18 @@
+{
+  "name": "@simulation/power-domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "电力领域模型包:输电线路 / 杆塔 / 检查部位与缺陷真值。只依赖 contracts —— 不认识沙盒、任务与渲染",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@simulation/contracts": "*"
+  }
+}

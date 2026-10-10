@@ -432,6 +432,15 @@ export class DroneAgent implements Agent<DroneSnapshot> {
   /**
    * 环境(风、障碍物)统一来自 Sandbox,不再由 UI 直接写 config。
    * 障碍物签名不变就不重建数组,避免每 tick 分配。
+   *
+   * ⚠️ 障碍盒必须**平移到机体坐标**再交给 DroneSim。`DroneSim.position` 是以起飞点
+   * 为原点的局部坐标(世界位姿由 `worldPosition` 加回 origin),而 Sandbox 里的障碍
+   * 是世界坐标 —— 直接塞进去就是「拿局部坐标去撞世界盒」:出生点不在原点时,机体
+   * 会撞上几十米外的杆塔投影(实测巡检场景里起飞点 (34,0,70),飞到世界 (33.7,14,69.7)
+   * 就被判「贴着障碍物」,一路 0.14 m/s 爬到转场超时),同时该避的真障碍反而看不见。
+   * 沙盒场景的机体出生在世界原点,平移量为零,所以这个错位一直没暴露。
+   *
+   * 这里只需要平移、不需要旋转:机体的 `heading` 本来就是世界航向,与障碍盒同系。
    */
   private syncEnvironment(context: AgentUpdateContext): void {
     const sandbox = context.sandbox
@@ -445,7 +454,17 @@ export class DroneAgent implements Agent<DroneSnapshot> {
     if (!this.environmentSynced || signature !== this.obstacleSignature) {
       this.environmentSynced = true
       this.obstacleSignature = signature
-      this.sim.obstacles = sandbox.obstacles.map((box) => ({ ...box }))
+      const { x: originX, y: originY, z: originZ } = this.origin
+      this.sim.obstacles = sandbox.obstacles.map((box) => ({
+        name: box.name,
+        minX: box.minX - originX,
+        maxX: box.maxX - originX,
+        minY: box.minY - originY,
+        maxY: box.maxY - originY,
+        minZ: box.minZ - originZ,
+        maxZ: box.maxZ - originZ,
+        solid: box.solid,
+      }))
     }
   }
 }
