@@ -47,6 +47,13 @@ const router = createRouter({
       component: () => import('../views/DocsView.vue'),
       meta: { title: '项目文档' },
     },
+    {
+      path: '/scene',
+      name: 'scene',
+      // 空白三维场景:纯 three 起手页,不依赖任何 @simulation/* 包 —— 同样按需加载
+      component: () => import('../views/SceneView.vue'),
+      meta: { title: '空白场景' },
+    },
   ],
 })
 
