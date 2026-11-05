@@ -17,6 +17,7 @@ import { formatClock, formatNumber } from '../utils/format'
 
 const {
   telemetry,
+  scenario,
   cameraMode,
   setCameraMode,
   setGimbalPitch,
@@ -24,6 +25,9 @@ const {
   takePhoto,
   toggleRecording,
   setRecordingReadyHandler,
+  datasetCapture,
+  createDatasetCaptureSession,
+  captureDatasetFrame,
 } = useSandbox()
 
 /** 云台俯仰行程(−90°~+60°)与出厂默认角,取自真机手册 */
@@ -67,6 +71,11 @@ const photoBusy = ref(false)
 const lastPhoto = ref<PhotoShot | null>(null)
 const photoNote = ref('')
 const recordNote = ref('')
+const datasetId = ref('drone-dataset-001')
+const datasetName = ref('无人机虚拟采集')
+const datasetBusy = ref(false)
+const datasetNote = ref('')
+const datasetFrameCount = ref(0)
 /** 最近一次录制成片:自动下载可能被浏览器静默拦掉,这里留一份供手动下载 */
 const lastRecording = ref<{ url: string; name: string; size: number } | null>(null)
 
@@ -110,6 +119,49 @@ async function toggleRec(): Promise<void> {
   }
   // 停止时的提示由成片回调写入,这里不要覆盖它
   if (!wasRecording) recordNote.value = '录制中…停止后自动保存'
+}
+
+async function createDataset(): Promise<void> {
+  if (!datasetId.value.trim()) {
+    datasetNote.value = '请输入数据集 ID'
+    return
+  }
+  datasetBusy.value = true
+  try {
+    await createDatasetCaptureSession({
+      datasetId: datasetId.value.trim(),
+      name: datasetName.value.trim() || datasetId.value.trim(),
+      sceneId: scenario.id,
+      sceneVersion: 'default',
+    })
+    datasetFrameCount.value = 0
+    datasetNote.value = `已连接数据集 ${datasetId.value.trim()}`
+  } catch (error) {
+    datasetNote.value = `创建失败:${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    datasetBusy.value = false
+  }
+}
+
+async function captureDataset(): Promise<void> {
+  if (!datasetCapture.value) {
+    datasetNote.value = '请先创建数据集'
+    return
+  }
+  datasetBusy.value = true
+  try {
+    const frame = await captureDatasetFrame({ source: 'drone-simulator', sceneId: scenario.id })
+    if (frame) {
+      datasetFrameCount.value += 1
+      datasetNote.value = `已上传第 ${datasetFrameCount.value} 张(${frame.width}×${frame.height})`
+    } else {
+      datasetNote.value = '采集失败:相机未就绪'
+    }
+  } catch (error) {
+    datasetNote.value = `上传失败:${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    datasetBusy.value = false
+  }
 }
 
 function onPitchInput(event: Event): void {
@@ -171,6 +223,30 @@ function toggleFpv(): void {
           <button @click="lookDown">垂直向下</button>
           <button @click="lookLevel">水平前视</button>
         </div>
+      </div>
+
+      <!-- 神经渲染数据集 -->
+      <div class="group">
+        <div class="row row--between">
+          <span class="field-label">神经渲染数据集</span>
+          <span class="tag tag--info">{{ datasetFrameCount }} 帧</span>
+        </div>
+        <input v-model="datasetId" type="text" placeholder="数据集 ID" />
+        <input v-model="datasetName" type="text" placeholder="数据集名称" />
+        <div class="grid">
+          <button :disabled="datasetBusy" data-testid="dataset-create" @click="createDataset">
+            {{ datasetBusy ? '处理中…' : datasetCapture ? '重新登记' : '创建数据集' }}
+          </button>
+          <button
+            :disabled="datasetBusy || !datasetCapture"
+            data-testid="dataset-capture"
+            @click="captureDataset"
+          >
+            采集并上传
+          </button>
+        </div>
+        <p class="hint">图片、相机位姿、内参和仿真时间会一起登记到 neural-render-service。</p>
+        <p v-if="datasetNote" class="hint" data-testid="dataset-note">{{ datasetNote }}</p>
       </div>
 
       <!-- 变焦 -->

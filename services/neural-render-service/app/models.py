@@ -70,6 +70,7 @@ class DatasetCreate(BaseModel):
     dataset_id: str = Field(default_factory=lambda: f"dataset-{uuid4().hex[:12]}")
     name: str = Field(min_length=1, max_length=200)
     scene_id: str | None = None
+    scene_version: str | None = None
     image_uri: str | None = None
     pose_uri: str | None = None
     calibration_uri: str | None = None
@@ -78,6 +79,42 @@ class DatasetCreate(BaseModel):
 
 class Dataset(DatasetCreate):
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class DatasetFramePose(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    position_m: Vec3 = Field(alias="positionM")
+    quaternion_xyzw: Quaternion = Field(alias="quaternionXyzw")
+    coordinate_frame: Literal["platform-world", "world", "agent", "gimbal"] = Field(
+        default="platform-world", alias="coordinateFrame"
+    )
+
+
+class DatasetFrameIntrinsics(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    width: int = Field(gt=0, le=8192)
+    height: int = Field(gt=0, le=8192)
+    fx: float = Field(gt=0)
+    fy: float = Field(gt=0)
+    cx: float = Field(ge=0)
+    cy: float = Field(ge=0)
+    distortion: list[float] = Field(default_factory=list)
+
+
+class DatasetFrameUpload(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    frame_id: str = Field(alias="frameId", min_length=1, max_length=160)
+    image_data_url: str = Field(alias="imageDataUrl", min_length=32)
+    width: int = Field(gt=0, le=8192)
+    height: int = Field(gt=0, le=8192)
+    simulation_time: float = Field(alias="simulationTime", ge=0)
+    captured_at: datetime = Field(alias="capturedAt")
+    camera_pose: DatasetFramePose = Field(alias="cameraPose")
+    camera_intrinsics: DatasetFrameIntrinsics = Field(alias="cameraIntrinsics")
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TrainRequest(BaseModel):

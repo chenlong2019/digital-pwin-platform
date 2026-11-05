@@ -15,6 +15,7 @@
  */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import type { DatasetCameraIntrinsics, DatasetCameraPose } from '@simulation/contracts'
 import type { SceneObstacle, SceneWire } from './drone-world'
 import { DroneWorld } from './drone-world'
 
@@ -81,6 +82,11 @@ export interface PhotoShot {
   readonly dataUrl: string
   readonly width: number
   readonly height: number
+}
+
+export interface CaptureCameraState {
+  readonly pose: DatasetCameraPose
+  readonly intrinsics: DatasetCameraIntrinsics
 }
 
 function pickRecordMime(): string | undefined {
@@ -410,6 +416,43 @@ export class SandboxScene {
       }, PHOTO_TIMEOUT_MS)
       this.photoRequest = request
     })
+  }
+
+  /**
+   * 返回与 requestPhoto() 同一云台取景源的相机外参与内参。
+   * 调用方必须在拍照完成后立即读取，避免把下一帧仿真状态写进当前图片。
+   */
+  getCaptureCamera(): CaptureCameraState | null {
+    const transform = this.captureTransform
+    if (!transform) return null
+    transform.updateWorldMatrix(true, false)
+    const position = new THREE.Vector3()
+    const quaternion = new THREE.Quaternion()
+    const direction = new THREE.Vector3()
+    transform.getWorldPosition(position)
+    transform.getWorldQuaternion(quaternion)
+    direction.set(0, 0, -1).applyQuaternion(quaternion)
+    position.addScaledVector(direction, GIMBAL_CAMERA_OFFSET)
+
+    const width = this.renderer.domElement.width
+    const height = this.renderer.domElement.height
+    const fy = (height / 2) / Math.tan((THREE.MathUtils.degToRad(this.camera.fov) / 2))
+    const fx = fy * (width / Math.max(height, 1))
+    return {
+      pose: {
+        positionM: { x: position.x, y: position.y, z: position.z },
+        quaternionXyzw: { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w },
+        coordinateFrame: 'platform-world',
+      },
+      intrinsics: {
+        width,
+        height,
+        fx: fx * this.captureZoom,
+        fy: fy * this.captureZoom,
+        cx: width / 2,
+        cy: height / 2,
+      },
+    }
   }
 
   /** 取景帧:记下原位姿,再把相机摆到云台上面 */

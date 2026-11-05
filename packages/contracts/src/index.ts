@@ -519,3 +519,5 @@ export interface SessionDescriptor {
   readonly seed: number
   readonly label: string
 }
+
+export * from './dataset'

@@ -15,6 +15,7 @@
   "dependencies": {
     "@dagrejs/dagre": "^3.1.1",
     "@simulation/contracts": "*",
+    "@simulation/camera-capture": "*",
     "@simulation/domain-api": "*",
     "@simulation/drone-agent": "*",
     "@simulation/evaluation-core": "*",

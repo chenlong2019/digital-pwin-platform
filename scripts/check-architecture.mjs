@@ -55,6 +55,7 @@ const MANIFEST = {
   collaboration: { layer: 'Capability', allow: ['contracts'], dir: 'packages/collaboration' },
   realtime: { layer: 'Capability', allow: ['contracts'], dir: 'packages/realtime' },
   input: { layer: 'Capability', allow: ['contracts', 'domain-api'], dir: 'packages/input' },
+  'camera-capture': { layer: 'Capability', allow: ['contracts'], dir: 'packages/camera-capture' },
 
   // 电力领域模型(架构文档 §37–§40):线路 / 杆塔 / 检查部位 / 缺陷真值。
   // 落在 Domain 层、**只依赖 contracts** —— 电网巡检的三个业务包(power-domain /

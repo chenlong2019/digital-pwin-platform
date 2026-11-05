@@ -19,6 +19,7 @@ import type { Scenario } from '@simulation/sandbox-core'
 import type {
   BodyViewFactory,
   CameraMode,
+  CaptureCameraState,
   DroneLightsSnapshot,
   PhotoShot,
   RadarAim,
@@ -85,6 +86,7 @@ export interface SandboxRenderer {
   setAuxBeamVisible?(visible: boolean): void
   // —— 相机(云台取景) ——
   requestPhoto?(): Promise<PhotoShot | null>
+  getCaptureCamera?(): CaptureCameraState | null
   readonly isRecording?: boolean
   startRecording?(): boolean
   stopRecording?(): Promise<Blob | null>

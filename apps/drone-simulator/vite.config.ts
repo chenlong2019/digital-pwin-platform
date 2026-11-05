@@ -15,6 +15,7 @@ const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
  */
 const packages = [
   'contracts',
+  'camera-capture',
   'simulation-core',
   'agent-core',
   'sandbox-core',

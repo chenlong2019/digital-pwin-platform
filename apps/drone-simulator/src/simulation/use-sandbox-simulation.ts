@@ -12,6 +12,8 @@
  */
 import { computed, onScopeDispose, ref, shallowRef } from 'vue'
 import type { ComputedRef, Ref, ShallowRef } from 'vue'
+import { CaptureService, NeuralRenderHttpClient } from '@simulation/camera-capture'
+import type { DatasetFrame } from '@simulation/contracts'
 import type {
   AgentId,
   AgentViewProjector,
@@ -127,6 +129,7 @@ export interface SandboxSimulation extends SimulationSessionView {
   readonly radarBeamsVisible: Ref<boolean>
   readonly auxBeamVisible: Ref<boolean>
   readonly statusLightOverride: ShallowRef<StatusLightKey | null>
+  readonly datasetCapture: ShallowRef<CaptureService | null>
   /** 页面注入的行业任务插件;没注入时为 null */
   readonly industryTask: IndustryTaskPlugin | null
 
@@ -152,6 +155,14 @@ export interface SandboxSimulation extends SimulationSessionView {
   nudgeGimbal(deltaPitch: number, deltaYaw?: number): Command | null
   /** 相机变焦倍数(1~4×),只在机载视角可见 */
   setCameraZoom(zoom: number): Command | null
+
+  createDatasetCaptureSession(input: {
+    datasetId: string
+    name: string
+    sceneId: string
+    sceneVersion?: string
+  }): Promise<void>
+  captureDatasetFrame(metadata?: Readonly<Record<string, unknown>>): Promise<DatasetFrame | null>
 
   /** 拍一张云台取景的照片(与机载视角同一取景,含变焦);相机未就绪时返回 null */
   takePhoto(): Promise<PhotoShot | null>
@@ -261,6 +272,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
   const radarBeamsVisible = ref(false)
   const auxBeamVisible = ref(false)
   const statusLightOverride = shallowRef<StatusLightKey | null>(null)
+  const datasetCapture = shallowRef<CaptureService | null>(null)
 
   // 行业任务插件由页面注入 —— 会话自己不认识任何行业包
   const industryTask = options.industryTask ? options.industryTask(session) : null
@@ -280,6 +292,11 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
   let smoothedFps = 0
   let stepsThisFrame = 0
   let disposed = false
+
+  const captureProvider = {
+    requestPhoto: async () => (await renderer?.requestPhoto?.()) ?? null,
+    getCaptureCamera: () => renderer?.getCaptureCamera?.() ?? null,
+  }
 
   const detachSnapshot = session.onSnapshot((next) => {
     snapshot = next
@@ -440,6 +457,38 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
       refreshHud()
     }
     return shot
+  }
+
+  async function createDatasetCaptureSession(input: {
+    datasetId: string
+    name: string
+    sceneId: string
+    sceneVersion?: string
+  }): Promise<void> {
+    const camera = renderer?.getCaptureCamera?.()
+    if (!camera) throw new Error('相机尚未就绪，无法创建数据集采集会话')
+    const client = new NeuralRenderHttpClient(
+      import.meta.env.VITE_NEURAL_RENDER_URL ?? 'http://127.0.0.1:8090',
+      globalThis.fetch.bind(globalThis),
+    )
+    const service = new CaptureService(captureProvider, client)
+    await service.createSession({
+      ...input,
+      camera: camera.intrinsics,
+      simulationTime: () => metrics.value.simulationTime,
+    })
+    datasetCapture.value = service
+  }
+
+  async function captureDatasetFrame(metadata?: Readonly<Record<string, unknown>>): Promise<DatasetFrame | null> {
+    const service = datasetCapture.value
+    if (!service) throw new Error('请先创建数据集采集会话')
+    const frame = await service.captureFrame(metadata)
+    if (frame) {
+      sendToDrone(DRONE_COMMAND.takePhoto)
+      refreshHud()
+    }
+    return frame
   }
 
   async function toggleRecording(): Promise<boolean> {
@@ -695,6 +744,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     radarBeamsVisible,
     auxBeamVisible,
     statusLightOverride,
+    datasetCapture,
     industryTask,
 
     attachRenderer,
@@ -716,6 +766,8 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     setGimbalPitch,
     nudgeGimbal,
     setCameraZoom,
+    createDatasetCaptureSession,
+    captureDatasetFrame,
     takePhoto,
     toggleRecording,
     setRecordingReadyHandler,

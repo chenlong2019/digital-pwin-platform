@@ -34,7 +34,7 @@ import type { DroneLightsSnapshot, StatusLightKey } from './drone-lights'
 import type { BatteryLightMode, AuxLightMode } from './drone-lights'
 import type { RadarAim, RadarSnapshot } from './drone-radar'
 import { DroneRadar } from './drone-radar'
-import type { CameraMode, PhotoShot, SceneObstacle, SceneWire } from './sandbox-scene'
+import type { CameraMode, CaptureCameraState, PhotoShot, SceneObstacle, SceneWire } from './sandbox-scene'
 import { CAMERA_MODE_LIST, SandboxScene } from './sandbox-scene'
 import type { DroneViewOptions } from './drone-view'
 import { DroneView } from './drone-view'
@@ -233,6 +233,10 @@ export class ThreeRenderAdapter implements RenderAdapter {
     return this.sandboxScene?.requestPhoto() ?? Promise.resolve(null)
   }
 
+  getCaptureCamera(): CaptureCameraState | null {
+    return this.sandboxScene?.getCaptureCamera() ?? null
+  }
+
   get isRecording(): boolean {
     return this.sandboxScene?.isRecording ?? false
   }
@@ -361,4 +365,4 @@ export class ThreeRenderAdapter implements RenderAdapter {
 }
 
 export { CAMERA_MODE_LIST }
-export type { CameraMode, PhotoShot, SceneObstacle, SceneWire }
+export type { CameraMode, CaptureCameraState, PhotoShot, SceneObstacle, SceneWire }

@@ -7,9 +7,10 @@
 - 健康检查和运行能力声明；
 - 场景登记；
 - 数据集登记；
+- 图片帧上传与数据集 Manifest 持久化；
 - 训练任务与渲染任务的统一任务模型；
 - 相机位姿、内参和输出类型的请求校验；
-- 内存存储适配器，便于先打通接口。
+- SQLite/PostgreSQL 元数据存储和本地图片落盘。
 
 当前渲染后端是 `placeholder`，会正确接受并记录请求，但不会生成神经渲染图像。接入真实后端时，只需要替换 `app/backends` 中的实现，不改变 HTTP 契约。
 
@@ -39,6 +40,8 @@ GET  /ready
 GET  /api/v1/scenes
 POST /api/v1/scenes
 POST /api/v1/datasets
+POST /api/v1/datasets/{dataset_id}/frames
+GET  /api/v1/datasets/{dataset_id}/manifest
 POST /api/v1/jobs/train
 POST /api/v1/scenes/{scene_id}/render
 GET  /api/v1/jobs/{job_id}
@@ -52,4 +55,4 @@ GET  /api/v1/jobs/{job_id}
 DATABASE_URL=postgresql://user:password@127.0.0.1:15432/neural_render
 ```
 
-第一版默认使用内存存储，所以没有数据库时也能启动和联调；`/ready` 会明确返回当前数据库是否已配置。
+默认使用本地 SQLite 持久化元数据和 `STORAGE_ROOT` 下的图片；配置 `DATABASE_URL` 后切换到 PostgreSQL。`/ready` 会明确返回当前数据库是否已配置。

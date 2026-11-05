@@ -7,6 +7,7 @@ from .config import settings
 from .models import (
     Dataset,
     DatasetCreate,
+    DatasetFrameUpload,
     HealthResponse,
     Job,
     ReadyResponse,
@@ -15,7 +16,7 @@ from .models import (
     SceneCreate,
     TrainRequest,
 )
-from .store import InMemoryStore
+from .store import PersistentStore
 
 
 app = FastAPI(
@@ -31,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-store = InMemoryStore()
+store = PersistentStore(settings.storage_root, settings.database_url)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -79,6 +80,24 @@ def create_dataset(request: DatasetCreate) -> Dataset:
         return store.create_dataset(request)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/datasets/{dataset_id}/frames", status_code=status.HTTP_201_CREATED)
+def upload_dataset_frame(dataset_id: str, request: DatasetFrameUpload) -> dict[str, str]:
+    try:
+        return store.add_frame(dataset_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/datasets/{dataset_id}/manifest")
+def get_dataset_manifest(dataset_id: str) -> dict:
+    manifest = store.get_manifest(dataset_id)
+    if not manifest:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
+    return manifest
 
 
 @app.post("/api/v1/jobs/train", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
