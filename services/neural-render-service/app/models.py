@@ -75,10 +75,30 @@ class DatasetCreate(BaseModel):
     pose_uri: str | None = None
     calibration_uri: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["draft", "ready", "training", "completed", "failed"] = "draft"
 
 
 class Dataset(DatasetCreate):
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class DatasetValidationIssue(BaseModel):
+    code: str
+    severity: Literal["error", "warning"]
+    message: str
+    frame_id: str | None = None
+
+
+class DatasetValidationResponse(BaseModel):
+    dataset_id: str
+    valid: bool
+    frame_count: int
+    issues: list[DatasetValidationIssue]
+
+
+class DatasetFinalizeResponse(BaseModel):
+    dataset: Dataset
+    validation: DatasetValidationResponse
 
 
 class DatasetFramePose(BaseModel):

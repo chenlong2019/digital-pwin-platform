@@ -42,6 +42,8 @@ POST /api/v1/scenes
 POST /api/v1/datasets
 POST /api/v1/datasets/{dataset_id}/frames
 GET  /api/v1/datasets/{dataset_id}/manifest
+POST /api/v1/datasets/{dataset_id}/validate
+POST /api/v1/datasets/{dataset_id}/finalize
 POST /api/v1/jobs/train
 POST /api/v1/scenes/{scene_id}/render
 GET  /api/v1/jobs/{job_id}

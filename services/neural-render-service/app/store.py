@@ -123,6 +123,71 @@ class PersistentStore:
             row = connection.execute(f"SELECT payload FROM datasets WHERE dataset_id = {placeholder}", (dataset_id,)).fetchone()
         return Dataset.model_validate(self._json_load(row[0])) if row else None
 
+    def _frame_payloads(self, dataset_id: str) -> list[dict[str, Any]]:
+        placeholder = self._placeholder()
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT payload FROM dataset_frames WHERE dataset_id = {placeholder} ORDER BY created_at, frame_id",
+                (dataset_id,),
+            ).fetchall()
+        return [self._json_load(row[0]) for row in rows]
+
+    def validate_dataset(self, dataset_id: str) -> dict[str, Any] | None:
+        dataset = self.get_dataset(dataset_id)
+        if not dataset:
+            return None
+        frames = self._frame_payloads(dataset_id)
+        issues: list[dict[str, Any]] = []
+        if not frames:
+            issues.append({"code": "NO_FRAMES", "severity": "error", "message": "数据集没有采集帧"})
+        elif len(frames) < 10:
+            issues.append({"code": "FEW_FRAMES", "severity": "warning", "message": "少于 10 帧，可能不足以支持稳定重建"})
+
+        previous_time: float | None = None
+        reference_intrinsics: dict[str, Any] | None = None
+        for frame in frames:
+            frame_id = frame.get("frameId")
+            image_uri = frame.get("imageUri", "")
+            image_path = self.storage_root / image_uri
+            if not image_path.is_file():
+                issues.append({"code": "IMAGE_MISSING", "severity": "error", "message": "图片文件不存在", "frame_id": frame_id})
+            simulation_time = frame.get("simulationTime")
+            if not isinstance(simulation_time, (int, float)):
+                issues.append({"code": "TIME_MISSING", "severity": "error", "message": "缺少仿真时间", "frame_id": frame_id})
+            elif previous_time is not None and simulation_time <= previous_time:
+                issues.append({"code": "TIME_NOT_MONOTONIC", "severity": "error", "message": "仿真时间没有递增", "frame_id": frame_id})
+            else:
+                previous_time = simulation_time
+            pose = frame.get("cameraPose")
+            if not pose or pose.get("coordinateFrame") != "platform-world":
+                issues.append({"code": "POSE_INVALID", "severity": "error", "message": "相机位姿缺失或坐标系不正确", "frame_id": frame_id})
+            intrinsics = frame.get("cameraIntrinsics")
+            if not intrinsics:
+                issues.append({"code": "INTRINSICS_MISSING", "severity": "error", "message": "缺少相机内参", "frame_id": frame_id})
+            elif reference_intrinsics is None:
+                reference_intrinsics = intrinsics
+            else:
+                keys = ("width", "height", "fx", "fy", "cx", "cy")
+                if any(abs(float(intrinsics.get(key, 0)) - float(reference_intrinsics.get(key, 0))) > 1e-3 for key in keys):
+                    issues.append({"code": "INTRINSICS_INCONSISTENT", "severity": "error", "message": "相机内参在帧之间不一致", "frame_id": frame_id})
+
+        errors = [issue for issue in issues if issue["severity"] == "error"]
+        return {"dataset_id": dataset_id, "valid": not errors, "frame_count": len(frames), "issues": issues}
+
+    def set_dataset_status(self, dataset_id: str, status: str) -> Dataset | None:
+        dataset = self.get_dataset(dataset_id)
+        if not dataset:
+            return None
+        updated = dataset.model_copy(update={"status": status})
+        placeholder = self._placeholder()
+        with self._connect() as connection:
+            connection.execute(
+                f"UPDATE datasets SET payload = {placeholder} WHERE dataset_id = {placeholder}",
+                (self._json_dump(updated.model_dump(mode="json")), dataset_id),
+            )
+            connection.commit()
+        return updated
+
     def create_job(self, job: Job) -> Job:
         payload = self._json_dump(job.model_dump(mode="json"))
         placeholder = self._placeholder()
@@ -176,12 +241,7 @@ class PersistentStore:
         if not dataset:
             return None
         placeholder = self._placeholder()
-        with self._connect() as connection:
-            rows = connection.execute(
-                f"SELECT payload FROM dataset_frames WHERE dataset_id = {placeholder} ORDER BY created_at, frame_id",
-                (dataset_id,),
-            ).fetchall()
-        frames = [self._json_load(row[0]) for row in rows]
+        frames = self._frame_payloads(dataset_id)
         first = frames[0] if frames else None
         return {
             "format": "simulation-platform/neural-dataset",

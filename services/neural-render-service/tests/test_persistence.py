@@ -36,3 +36,42 @@ def test_sqlite_store_persists_dataset_frames(tmp_path) -> None:
     assert manifest is not None
     assert manifest["coordinateFrame"] == "platform-world"
     assert len(manifest["frames"]) == 1
+
+
+def test_dataset_validation_survives_store_restart(tmp_path) -> None:
+    first = PersistentStore(str(tmp_path))
+    first.create_scene(SceneCreate(scene_id="scene-2", name="Scene 2"))
+    first.create_dataset(DatasetCreate(dataset_id="dataset-2", name="Dataset 2", scene_id="scene-2"))
+    for index in range(10):
+        first.add_frame(
+            "dataset-2",
+            DatasetFrameUpload(
+                frameId=f"frame-{index}",
+                imageDataUrl="data:image/png;base64,iVBORw0KGgo=",
+                width=1280,
+                height=720,
+                simulationTime=float(index),
+                capturedAt=f"2026-11-05T12:00:{index:02d}Z",
+                cameraPose={
+                    "positionM": {"x": index, "y": 2, "z": 3},
+                    "quaternionXyzw": {"x": 0, "y": 0, "z": 0, "w": 1},
+                },
+                cameraIntrinsics={
+                    "width": 1280,
+                    "height": 720,
+                    "fx": 800,
+                    "fy": 800,
+                    "cx": 640,
+                    "cy": 360,
+                },
+            ),
+        )
+
+    second = PersistentStore(str(tmp_path))
+    validation = second.validate_dataset("dataset-2")
+    assert validation is not None
+    assert validation["valid"] is True
+    assert validation["frame_count"] == 10
+    finalized = second.set_dataset_status("dataset-2", "ready")
+    assert finalized is not None
+    assert finalized.status == "ready"

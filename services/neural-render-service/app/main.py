@@ -8,6 +8,7 @@ from .models import (
     Dataset,
     DatasetCreate,
     DatasetFrameUpload,
+    DatasetFinalizeResponse,
     HealthResponse,
     Job,
     ReadyResponse,
@@ -15,6 +16,7 @@ from .models import (
     Scene,
     SceneCreate,
     TrainRequest,
+    DatasetValidationResponse,
 )
 from .store import PersistentStore
 
@@ -40,22 +42,23 @@ def health() -> HealthResponse:
     return HealthResponse(
         service=settings.service_name,
         renderer_backend=settings.render_backend,
-        database_configured=settings.database_configured,
+        database_configured=store.database_available,
         storage_root=settings.storage_root,
     )
 
 
 @app.get("/ready", response_model=ReadyResponse)
 def ready(response: Response) -> ReadyResponse:
-    renderer_available = settings.render_backend != "placeholder"
-    is_ready = settings.database_configured and renderer_available
+    renderer_available = settings.render_backend in {"placeholder", "gsplat", "nerf"}
+    database_available = store.database_available
+    is_ready = database_available and renderer_available
     if not is_ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return ReadyResponse(
         status="ready" if is_ready else "degraded",
         service=settings.service_name,
         renderer_available=renderer_available,
-        database_configured=settings.database_configured,
+        database_configured=database_available,
     )
 
 
@@ -90,6 +93,28 @@ def upload_dataset_frame(dataset_id: str, request: DatasetFrameUpload) -> dict[s
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/datasets/{dataset_id}/validate", response_model=DatasetValidationResponse)
+def validate_dataset(dataset_id: str) -> DatasetValidationResponse:
+    result = store.validate_dataset(dataset_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
+    return DatasetValidationResponse.model_validate(result)
+
+
+@app.post("/api/v1/datasets/{dataset_id}/finalize", response_model=DatasetFinalizeResponse)
+def finalize_dataset(dataset_id: str) -> DatasetFinalizeResponse:
+    result = store.validate_dataset(dataset_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
+    validation = DatasetValidationResponse.model_validate(result)
+    if not validation.valid:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=validation.model_dump(mode="json"))
+    dataset = store.set_dataset_status(dataset_id, "ready")
+    if dataset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
+    return DatasetFinalizeResponse(dataset=dataset, validation=validation)
 
 
 @app.get("/api/v1/datasets/{dataset_id}/manifest")

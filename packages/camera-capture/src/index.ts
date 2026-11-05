@@ -43,6 +43,20 @@ export interface DatasetRegistrationClient {
     metadata?: Readonly<Record<string, unknown>>
   }): Promise<void>
   uploadFrame(datasetId: string, frame: DatasetFrameUpload): Promise<{ imageUri: string }>
+  validateDataset(datasetId: string): Promise<DatasetValidationResult>
+  finalizeDataset(datasetId: string): Promise<void>
+}
+
+export interface DatasetValidationResult {
+  readonly dataset_id: string
+  readonly valid: boolean
+  readonly frame_count: number
+  readonly issues: ReadonlyArray<{
+    code: string
+    severity: 'error' | 'warning'
+    message: string
+    frame_id?: string
+  }>
 }
 
 export interface Fetcher {
@@ -70,6 +84,15 @@ export interface CaptureDatasetSession {
   readonly manifest: NeuralDatasetManifest
 }
 
+export interface AutoCaptureOptions {
+  /** 仿真时间间隔，单位毫秒；0 表示关闭时间触发。 */
+  readonly intervalMs?: number
+  /** 飞行距离间隔，单位米；0 表示关闭距离触发。 */
+  readonly distanceM?: number
+  readonly metadata?: Readonly<Record<string, unknown>> | (() => Readonly<Record<string, unknown>>)
+  readonly onFrame?: (frame: DatasetFrame) => void
+}
+
 /**
  * 把渲染器的虚拟拍照能力接成持久化数据集。
  * requestPhoto() 和 getCaptureCamera() 必须来自同一个渲染器实例，
@@ -82,6 +105,11 @@ export class CaptureService {
   private simulationTime: () => number = () => 0
   private now: () => string = () => new Date().toISOString()
   private createFrameId: () => string = () => `frame-${Math.random().toString(36).slice(2, 10)}`
+  private autoTimer: ReturnType<typeof setInterval> | null = null
+  private autoOptions: AutoCaptureOptions | null = null
+  private autoLastCapturedAt = 0
+  private autoLastPosition: DatasetCameraPose['positionM'] | null = null
+  private autoBusy = false
 
   constructor(provider: CaptureProvider, client: DatasetRegistrationClient) {
     this.provider = provider
@@ -110,6 +138,32 @@ export class CaptureService {
 
   get activeSession(): CaptureDatasetSession | null {
     return this.session
+  }
+
+  get isAutoCapturing(): boolean {
+    return this.autoTimer !== null
+  }
+
+  startAutoCapture(options: AutoCaptureOptions = {}): boolean {
+    if (!this.session) return false
+    const intervalMs = Math.max(0, options.intervalMs ?? 0)
+    const distanceM = Math.max(0, options.distanceM ?? 0)
+    if (intervalMs <= 0 && distanceM <= 0) return false
+    this.stopAutoCapture()
+    this.autoOptions = { ...options, intervalMs, distanceM }
+    this.autoLastCapturedAt = 0
+    this.autoLastPosition = null
+    this.autoTimer = setInterval(() => void this.tickAutoCapture(), 200)
+    void this.tickAutoCapture(true)
+    return true
+  }
+
+  stopAutoCapture(): void {
+    if (this.autoTimer !== null) clearInterval(this.autoTimer)
+    this.autoTimer = null
+    this.autoOptions = null
+    this.autoLastPosition = null
+    this.autoBusy = false
   }
 
   async captureFrame(metadata?: Readonly<Record<string, unknown>>): Promise<DatasetFrame | null> {
@@ -163,6 +217,49 @@ export class CaptureService {
     }
     return frame
   }
+
+  private async tickAutoCapture(force = false): Promise<void> {
+    const options = this.autoOptions
+    if (!options || this.autoBusy || !this.session) return
+    const camera = this.provider.getCaptureCamera()
+    if (!camera) return
+    const now = Date.now()
+    const elapsed = now - this.autoLastCapturedAt
+    const position = camera.pose.positionM
+    const moved = this.autoLastPosition
+      ? Math.hypot(
+          position.x - this.autoLastPosition.x,
+          position.y - this.autoLastPosition.y,
+          position.z - this.autoLastPosition.z,
+        )
+      : Number.POSITIVE_INFINITY
+    const dueByTime = (options.intervalMs ?? 0) > 0 && elapsed >= (options.intervalMs ?? 0)
+    const dueByDistance = (options.distanceM ?? 0) > 0 && moved >= (options.distanceM ?? 0)
+    if (!force && !dueByTime && !dueByDistance) return
+
+    this.autoBusy = true
+    try {
+      const metadata = typeof options.metadata === 'function' ? options.metadata() : options.metadata
+      const frame = await this.captureFrame(metadata)
+      if (frame) {
+        this.autoLastCapturedAt = Date.now()
+        this.autoLastPosition = { ...position }
+        options.onFrame?.(frame)
+      }
+    } finally {
+      this.autoBusy = false
+    }
+  }
+
+  validateDataset(): Promise<DatasetValidationResult> {
+    if (!this.session) return Promise.reject(new Error('capture session has not been created'))
+    return this.client.validateDataset(this.session.datasetId)
+  }
+
+  async finalizeDataset(): Promise<void> {
+    if (!this.session) throw new Error('capture session has not been created')
+    await this.client.finalizeDataset(this.session.datasetId)
+  }
 }
 
 export class NeuralRenderHttpClient implements DatasetRegistrationClient {
@@ -191,5 +288,24 @@ export class NeuralRenderHttpClient implements DatasetRegistrationClient {
     })
     if (!response.ok) throw new Error(`dataset frame upload failed: ${response.status}`)
     return (await response.json()) as { imageUri: string }
+  }
+
+  async validateDataset(datasetId: string): Promise<DatasetValidationResult> {
+    const response = await this.fetcher(`${this.baseUrl}/api/v1/datasets/${datasetId}/validate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    if (!response.ok) throw new Error(`dataset validation failed: ${response.status}`)
+    return (await response.json()) as DatasetValidationResult
+  }
+
+  async finalizeDataset(datasetId: string): Promise<void> {
+    const response = await this.fetcher(`${this.baseUrl}/api/v1/datasets/${datasetId}/finalize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    if (!response.ok) throw new Error(`dataset finalize failed: ${response.status}`)
   }
 }

@@ -28,6 +28,11 @@ const {
   datasetCapture,
   createDatasetCaptureSession,
   captureDatasetFrame,
+  datasetAutoCapturing,
+  startDatasetAutoCapture,
+  stopDatasetAutoCapture,
+  validateDatasetCapture,
+  finalizeDatasetCapture,
 } = useSandbox()
 
 /** 云台俯仰行程(−90°~+60°)与出厂默认角,取自真机手册 */
@@ -76,6 +81,8 @@ const datasetName = ref('无人机虚拟采集')
 const datasetBusy = ref(false)
 const datasetNote = ref('')
 const datasetFrameCount = ref(0)
+const datasetDistance = ref(1)
+const datasetIntervalSeconds = ref(0)
 /** 最近一次录制成片:自动下载可能被浏览器静默拦掉,这里留一份供手动下载 */
 const lastRecording = ref<{ url: string; name: string; size: number } | null>(null)
 
@@ -164,6 +171,46 @@ async function captureDataset(): Promise<void> {
   }
 }
 
+function toggleDatasetAutoCapture(): void {
+  if (datasetAutoCapturing.value) {
+    stopDatasetAutoCapture()
+    datasetNote.value = '已停止自动采集'
+    return
+  }
+  if (!datasetCapture.value) {
+    datasetNote.value = '请先创建数据集'
+    return
+  }
+  const started = startDatasetAutoCapture({
+    distanceM: Math.max(0, datasetDistance.value),
+    intervalMs: Math.max(0, datasetIntervalSeconds.value * 1000),
+    onFrame: () => {
+      datasetFrameCount.value += 1
+    },
+  })
+  datasetNote.value = started ? '自动采集中…' : '请至少设置距离或时间间隔'
+}
+
+async function validateDataset(): Promise<void> {
+  try {
+    const result = await validateDatasetCapture()
+    const errors = result.issues.filter((issue) => issue.severity === 'error').length
+    const warnings = result.issues.filter((issue) => issue.severity === 'warning').length
+    datasetNote.value = `校验完成:${result.frame_count} 帧，错误 ${errors}，警告 ${warnings}`
+  } catch (error) {
+    datasetNote.value = `校验失败:${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
+async function finalizeDataset(): Promise<void> {
+  try {
+    await finalizeDatasetCapture()
+    datasetNote.value = '数据集已封存，可以进入预处理和训练'
+  } catch (error) {
+    datasetNote.value = `封存失败:${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
 function onPitchInput(event: Event): void {
   const value = Number((event.target as HTMLInputElement).value)
   pitch.value = value
@@ -234,6 +281,10 @@ function toggleFpv(): void {
         <input v-model="datasetId" type="text" placeholder="数据集 ID" />
         <input v-model="datasetName" type="text" placeholder="数据集名称" />
         <div class="grid">
+          <label class="field-label">每隔米<input v-model.number="datasetDistance" type="number" min="0" step="0.1" /></label>
+          <label class="field-label">每隔秒<input v-model.number="datasetIntervalSeconds" type="number" min="0" step="0.1" /></label>
+        </div>
+        <div class="grid">
           <button :disabled="datasetBusy" data-testid="dataset-create" @click="createDataset">
             {{ datasetBusy ? '处理中…' : datasetCapture ? '重新登记' : '创建数据集' }}
           </button>
@@ -244,8 +295,24 @@ function toggleFpv(): void {
           >
             采集并上传
           </button>
+          <button
+            :disabled="datasetBusy || !datasetCapture"
+            :class="{ active: datasetAutoCapturing }"
+            data-testid="dataset-auto-capture"
+            @click="toggleDatasetAutoCapture"
+          >
+            {{ datasetAutoCapturing ? '停止自动采集' : '开始自动采集' }}
+          </button>
         </div>
-        <p class="hint">图片、相机位姿、内参和仿真时间会一起登记到 neural-render-service。</p>
+        <div class="grid">
+          <button :disabled="datasetBusy || !datasetCapture" data-testid="dataset-validate" @click="validateDataset">
+            校验数据集
+          </button>
+          <button :disabled="datasetBusy || !datasetCapture" data-testid="dataset-finalize" @click="finalizeDataset">
+            封存数据集
+          </button>
+        </div>
+        <p class="hint">距离和时间任一条件满足就采集。图片、相机位姿、内参和仿真时间会一起登记。</p>
         <p v-if="datasetNote" class="hint" data-testid="dataset-note">{{ datasetNote }}</p>
       </div>
 

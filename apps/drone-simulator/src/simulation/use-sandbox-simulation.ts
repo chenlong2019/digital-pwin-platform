@@ -13,6 +13,7 @@
 import { computed, onScopeDispose, ref, shallowRef } from 'vue'
 import type { ComputedRef, Ref, ShallowRef } from 'vue'
 import { CaptureService, NeuralRenderHttpClient } from '@simulation/camera-capture'
+import type { AutoCaptureOptions, DatasetValidationResult } from '@simulation/camera-capture'
 import type { DatasetFrame } from '@simulation/contracts'
 import type {
   AgentId,
@@ -130,6 +131,7 @@ export interface SandboxSimulation extends SimulationSessionView {
   readonly auxBeamVisible: Ref<boolean>
   readonly statusLightOverride: ShallowRef<StatusLightKey | null>
   readonly datasetCapture: ShallowRef<CaptureService | null>
+  readonly datasetAutoCapturing: Ref<boolean>
   /** 页面注入的行业任务插件;没注入时为 null */
   readonly industryTask: IndustryTaskPlugin | null
 
@@ -163,6 +165,10 @@ export interface SandboxSimulation extends SimulationSessionView {
     sceneVersion?: string
   }): Promise<void>
   captureDatasetFrame(metadata?: Readonly<Record<string, unknown>>): Promise<DatasetFrame | null>
+  startDatasetAutoCapture(options?: AutoCaptureOptions): boolean
+  stopDatasetAutoCapture(): void
+  validateDatasetCapture(): Promise<DatasetValidationResult>
+  finalizeDatasetCapture(): Promise<void>
 
   /** 拍一张云台取景的照片(与机载视角同一取景,含变焦);相机未就绪时返回 null */
   takePhoto(): Promise<PhotoShot | null>
@@ -273,6 +279,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
   const auxBeamVisible = ref(false)
   const statusLightOverride = shallowRef<StatusLightKey | null>(null)
   const datasetCapture = shallowRef<CaptureService | null>(null)
+  const datasetAutoCapturing = ref(false)
 
   // 行业任务插件由页面注入 —— 会话自己不认识任何行业包
   const industryTask = options.industryTask ? options.industryTask(session) : null
@@ -489,6 +496,38 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
       refreshHud()
     }
     return frame
+  }
+
+  function startDatasetAutoCapture(options: AutoCaptureOptions = {}): boolean {
+    const service = datasetCapture.value
+    const started = service?.startAutoCapture({
+      ...options,
+      metadata: () => ({
+        source: 'drone-simulator',
+        sceneId: scenario.id,
+        ...(typeof options.metadata === 'function' ? options.metadata() : options.metadata),
+      }),
+    }) ?? false
+    datasetAutoCapturing.value = started
+    return started
+  }
+
+  function stopDatasetAutoCapture(): void {
+    datasetCapture.value?.stopAutoCapture()
+    datasetAutoCapturing.value = false
+  }
+
+  function validateDatasetCapture(): Promise<DatasetValidationResult> {
+    const service = datasetCapture.value
+    if (!service) return Promise.reject(new Error('请先创建数据集采集会话'))
+    return service.validateDataset()
+  }
+
+  async function finalizeDatasetCapture(): Promise<void> {
+    const service = datasetCapture.value
+    if (!service) throw new Error('请先创建数据集采集会话')
+    stopDatasetAutoCapture()
+    await service.finalizeDataset()
   }
 
   async function toggleRecording(): Promise<boolean> {
@@ -711,6 +750,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     disposed = true
     if (frameId !== 0) window.cancelAnimationFrame(frameId)
     frameId = 0
+    stopDatasetAutoCapture()
     detachSnapshot()
     renderer = null
     session.dispose()
@@ -745,6 +785,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     auxBeamVisible,
     statusLightOverride,
     datasetCapture,
+    datasetAutoCapturing,
     industryTask,
 
     attachRenderer,
@@ -768,6 +809,10 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     setCameraZoom,
     createDatasetCaptureSession,
     captureDatasetFrame,
+    startDatasetAutoCapture,
+    stopDatasetAutoCapture,
+    validateDatasetCapture,
+    finalizeDatasetCapture,
     takePhoto,
     toggleRecording,
     setRecordingReadyHandler,
