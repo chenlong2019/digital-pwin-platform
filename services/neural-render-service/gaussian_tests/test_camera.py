@@ -36,6 +36,19 @@ def test_rotated_camera_and_scene_normalization_keep_the_same_projection():
     np.testing.assert_allclose(view*scale, [2, 1, 10], atol=1e-5)
 
 
+def test_native_1024_capture_is_supported_but_larger_and_untiled_sizes_are_rejected():
+    manifest = {"frames": [frame(i, "train" if i < 8 else "test") for i in range(10)]}
+    for item in manifest["frames"]:
+        item.update(width=1024, height=768)
+        item["cameraIntrinsics"].update(width=1024, height=768, fx=800, fy=800, cx=512, cy=384)
+    assert tuple(map(len, validate_split(manifest))) == (8, 2)
+    for width in [1040, 1000]:
+        for item in manifest["frames"]:
+            item["width"] = item["cameraIntrinsics"]["width"] = width
+        with pytest.raises(ValueError, match="resolution"):
+            validate_split(manifest)
+
+
 def test_quality_comparison_matches_physical_cameras_across_resolutions_and_rejects_changed_views():
     previous = [frame(i) for i in range(2)]
     current = deepcopy(previous[::-1])

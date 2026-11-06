@@ -100,12 +100,16 @@ test('指定实验链接恢复结果，报告读取失败后自动重试，切�
   expect(errors).toEqual([])
 })
 
-test('高清为新实验默认档位，旧实验保持原设置；测试图按原始尺寸查看并支持关闭', async ({ page }) => {
+test('单栋精细为新实验默认档位，旧实验保持原设置；测试图按原始尺寸查看并支持关闭', async ({
+  page,
+}) => {
   await mockService(page)
   await page.goto('/experiments')
-  await expect(page.getByTestId('experiment-preset')).toHaveValue('detail')
-  await expect(page.getByTestId('experiment-steps')).toHaveValue('2400')
-  await expect(page.locator('input[type="number"]')).toHaveValue('48000')
+  await expect(page.getByTestId('experiment-preset')).toHaveValue('building')
+  await expect(page.getByTestId('experiment-steps')).toHaveValue('6000')
+  await expect(page.locator('input[type="number"]')).toHaveValue('180000')
+  await expect(page.getByRole('heading', { name: '西南独立楼 A · 精细采集' })).toBeVisible()
+  await expect(page.locator('.capture-summary')).toContainText('64 个训练视角')
   await page.getByTestId('experiment-preset').selectOption('baseline')
   await expect(page.getByTestId('experiment-steps')).toHaveValue('400')
   await page.goto(`/experiments?job=${jobId}`)

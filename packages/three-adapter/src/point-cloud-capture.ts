@@ -71,10 +71,10 @@ export class PointCloudCaptureRenderer {
       !Number.isInteger(height) ||
       width < 64 ||
       height < 64 ||
-      width > 512 ||
-      height > 512
+      width > 1024 ||
+      height > 1024
     )
-      throw new Error('采集分辨率需在 64–512 像素之间')
+      throw new Error('采集分辨率需在 64–1024 像素之间')
     this.camera.aspect = width / height
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(width, height, false)

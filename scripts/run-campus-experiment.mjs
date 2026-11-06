@@ -31,7 +31,10 @@ try {
       body: JSON.stringify({
         dataset_id: options.dataset,
         steps: Number(options.steps ?? 400),
-        gaussians: Number(options.gaussians ?? (options.preset === 'detail' ? 48000 : 8000)),
+        gaussians: Number(
+          options.gaussians ??
+            (options.preset === 'building' ? 180000 : options.preset === 'detail' ? 48000 : 8000),
+        ),
         quality_preset: options.preset ?? 'baseline',
       }),
     })
@@ -55,6 +58,12 @@ try {
       { timeout: 60_000 },
     )
     if (options.preset) await page.getByTestId('experiment-preset').selectOption(options.preset)
+    // Changing the target remounts its source scene; capture must wait for readiness.
+    await page.waitForFunction(
+      () => !document.querySelector('[data-testid="experiment-start"]')?.disabled,
+      null,
+      { timeout: 60_000 },
+    )
     if (options.steps) await page.getByTestId('experiment-steps').selectOption(options.steps)
     if (options.gaussians) await page.locator('input[type="number"]').fill(options.gaussians)
     await button.click()
@@ -74,7 +83,7 @@ try {
   )
   console.log(`Training ${jobId}`)
   let last = ''
-  const deadline = Date.now() + 20 * 60_000
+  const deadline = Date.now() + 60 * 60_000
   while (Date.now() < deadline) {
     const response = await fetch(`${api}/api/v1/jobs/${jobId}`, {
       signal: AbortSignal.timeout(10_000),

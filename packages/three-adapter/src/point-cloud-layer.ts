@@ -19,6 +19,8 @@ export interface PointCloudSceneOptions {
   readonly bounds: { readonly min: readonly number[]; readonly max: readonly number[] }
   readonly pointBudget?: number
   readonly cachePointBudget?: number
+  /** Opaque overlapping discs for dense surface supervision; raw RGB, no sphere light. */
+  readonly surfaceCoverage?: boolean
 }
 
 export interface PointCloudSnapshot {
@@ -52,12 +54,13 @@ const vertexShader = `
   uniform float tileCount;
   uniform float focalPixels;
   uniform float overview;
+  uniform float pointDiameter;
   varying vec3 vColor;
   void main() {
     vColor = color;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = clamp(spacing * 0.95 * focalPixels / max(0.05, -mv.z), 1.25, 48.0);
+    gl_PointSize = clamp(spacing * pointDiameter * focalPixels / max(0.05, -mv.z), 1.25, 48.0);
     if (overview > 0.5 && texture2D(coverage, vec2((tileIndex + 0.5) / tileCount, 0.5)).r < 0.5) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       gl_PointSize = 0.0;
@@ -66,12 +69,14 @@ const vertexShader = `
 `
 const fragmentShader = `
   varying vec3 vColor;
+  uniform float surfaceCoverage;
   void main() {
     vec2 xy = gl_PointCoord * 2.0 - 1.0;
     float r2 = dot(xy, xy);
     if (r2 > 1.0) discard;
     vec3 normal = vec3(xy, sqrt(max(0.0, 1.0 - r2)));
     float light = 0.72 + 0.28 * max(0.0, dot(normal, normalize(vec3(-0.4, 0.6, 0.7))));
+    if (surfaceCoverage > 0.5) light = 1.0;
     gl_FragColor = vec4(pow(vColor, vec3(2.2)) * light, 1.0);
     #include <colorspace_fragment>
   }
@@ -143,6 +148,8 @@ export class PointCloudLayer {
           tileCount: { value: index.tiles.length },
           focalPixels: { value: 800 },
           overview: { value: 1 },
+          pointDiameter: { value: this.options.surfaceCoverage ? 1.7 : 0.95 },
+          surfaceCoverage: { value: this.options.surfaceCoverage ? 1 : 0 },
         },
       })
       for (const tile of index.tiles) {

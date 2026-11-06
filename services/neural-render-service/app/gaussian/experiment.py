@@ -19,6 +19,7 @@ from .metrics import image_metrics, ssim
 from .renderer import GaussianModel
 from .source import source_identity
 from .profiles import training_profile
+from .surface import initialize_surfaces
 
 BACKEND = "torch-3dgs-reference"
 
@@ -104,7 +105,7 @@ def run(config_path: Path):
         torch.set_num_threads(min(4, os.cpu_count() or 1))
         seed = config["seed"]
         torch.manual_seed(seed); np.random.seed(seed)
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        device = torch.device(config.get("device", "cuda:0" if torch.cuda.is_available() else "cpu"))
         if device.type != "cuda" and not config.get("allow_cpu", False):
             raise RuntimeError("CUDA GPU unavailable. Install a CUDA torch build or explicitly allow CPU.")
         if device.type == "cuda": torch.cuda.set_per_process_memory_fraction(0.65, device)
@@ -117,22 +118,25 @@ def run(config_path: Path):
         if identity != config["source_identity"]:
             raise ValueError("Source point cloud changed after experiment submission")
         # Test images are loaded only during final evaluation, never by training.
-        origin = np.array([0, 25, -105], np.float32)
-        scene_scale = 150.0
         profile = config.get("training_profile", training_profile(config))
+        origin = np.array(profile.get("scene_origin", [0, 25, -105]), np.float32)
+        scene_scale = profile.get("scene_scale", 150.0)
         means, colors, voxel_size = point_prior(Path(config["assets"]), config["gaussians"], seed, profile["voxel_size_m"])
         count = len(means)
+        world_means = means.copy()
         means = torch.tensor((means-origin)/scene_scale, device=device)
         model = GaussianModel(means, torch.tensor(colors, device=device),
                               torch.full((count, 3), voxel_size*profile["scale_factor"]/scene_scale, device=device))
+        surface_initialization = (initialize_surfaces(model, world_means, voxel_size, scene_scale)
+                                  if profile.get("surface_initialization") else None)
         initial_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
         background = torch.tensor(config["background"], device=device)
         optimizer = torch.optim.Adam([
             {"params": [model.means], "lr": profile["position_lr"]},
-            {"params": [model.colors], "lr": 0.025},
-            {"params": [model.log_scales], "lr": 0.006},
-            {"params": [model.quaternions], "lr": 0.002},
-            {"params": [model.opacity], "lr": 0.025},
+            {"params": [model.colors], "lr": profile.get("color_lr", 0.025)},
+            {"params": [model.log_scales], "lr": profile.get("scale_lr", 0.006)},
+            {"params": [model.quaternions], "lr": profile.get("rotation_lr", 0.002)},
+            {"params": [model.opacity], "lr": profile.get("opacity_lr", 0.025)},
         ], eps=1e-8)
         checkpoint_path = output / "checkpoint.pt"
         start_step, history, previous_seconds = 0, [], 0.0
@@ -154,14 +158,17 @@ def run(config_path: Path):
             torch.set_rng_state(checkpoint["rng"].cpu())
             if device.type == "cuda": torch.cuda.set_rng_state(checkpoint["cuda_rng"].cpu())
         cameras = [camera_tensors(frame, origin, scene_scale, device) for frame in train_frames]
-        references = [load_image(storage, frame, device) for frame in train_frames]
+        reference_device = torch.device("cpu") if profile.get("microbatch_tiles") else device
+        references = [load_image(storage, frame, reference_device) for frame in train_frames]
         width, height = train_frames[0]["width"], train_frames[0]["height"]
         if width % 16 or height % 16:
             raise ValueError("Reference experiment resolution must be divisible by 16")
         rows, columns = height//16, width//16
         patches = [image.reshape(rows, 16, columns, 16, 3).permute(0, 2, 1, 3, 4).reshape(rows*columns, 256, 3)
                    for image in references]
-        foreground_tiles = [torch.nonzero((patch-background).abs().amax(-1).mean(-1) > 0.03).flatten() for patch in patches]
+        foreground_tiles = [torch.nonzero((patch-background.to(reference_device)).abs().amax(-1).mean(-1) > 0.03)
+                            .flatten().to(device) for patch in patches]
+        del references
         synchronize(device)
         started = time.perf_counter()
 
@@ -188,19 +195,26 @@ def run(config_path: Path):
             occupied = foreground_tiles[view]
             if len(occupied): selected = torch.cat([selected, occupied[torch.randint(len(occupied), (profile["foreground_tiles"],), device=device)]])
             optimizer.zero_grad(set_to_none=True)
-            predicted = model.render_tiles(model.project(cameras[view]), cameras[view], selected, background)
-            reference = patches[view][selected]
-            l1 = (predicted-reference).abs().mean()
-            score = ssim(predicted.reshape(-1, 16, 16, 3).permute(0, 3, 1, 2),
-                         reference.reshape(-1, 16, 16, 3).permute(0, 3, 1, 2))
-            loss = 0.8*l1 + 0.2*(1-score)
-            if not torch.isfinite(loss): raise RuntimeError("Non-finite Gaussian training loss")
-            loss.backward()
+            loss_value, l1_value = 0.0, 0.0
+            # Exact weighted gradient accumulation, without dropping visible splats.
+            for batch in selected.split(profile.get("microbatch_tiles", len(selected))):
+                predicted = model.render_tiles(model.project(cameras[view]), cameras[view], batch, background)
+                reference = patches[view][batch.to(reference_device)].to(device)
+                l1 = (predicted-reference).abs().mean()
+                score = ssim(predicted.reshape(-1, 16, 16, 3).permute(0, 3, 1, 2),
+                             reference.reshape(-1, 16, 16, 3).permute(0, 3, 1, 2))
+                loss = 0.8*l1 + 0.2*(1-score)
+                if not torch.isfinite(loss): raise RuntimeError("Non-finite Gaussian training loss")
+                weight = len(batch)/len(selected)
+                (loss*weight).backward()
+                loss_value += float(loss.detach())*weight
+                l1_value += float(l1.detach())*weight
             torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
             optimizer.step()
-            with torch.no_grad(): model.log_scales.clamp_(math.log(0.05/scene_scale), math.log(profile["max_scale_m"]/scene_scale))
+            with torch.no_grad(): model.log_scales.clamp_(math.log(profile.get("min_scale_m", 0.05)/scene_scale),
+                                                        math.log(profile["max_scale_m"]/scene_scale))
             if (step+1) % 20 == 0 or step+1 == config["steps"]:
-                row = {"step": step+1, "loss": float(loss.detach()), "l1": float(l1.detach())}
+                row = {"step": step+1, "loss": loss_value, "l1": l1_value}
                 history.append(row)
                 progress("training", step+1, loss=row["loss"], elapsed_seconds=previous_seconds+time.perf_counter()-started,
                          resumed_from_step=start_step)
@@ -247,6 +261,10 @@ def run(config_path: Path):
                   "source_verified_at_capture": config.get("source_verified_at_capture", False),
                   "seed": seed, "steps": config["steps"], "resumed_from_step": start_step,
                   "quality_preset": profile["name"], "training_profile": profile,
+                  "scene_id": config.get("scene_id", manifest.get("sceneId")),
+                  "surface_initialization": surface_initialization,
+                  "normalization": {"origin": origin.tolist(), "scene_scale": scene_scale},
+                  "capture_representation": manifest.get("metadata", {}).get("pointAppearance", "legacy_lit_point_discs"),
                   "train_frames": [f["frameId"] for f in train_frames], "test_frames": [f["frameId"] for f in test_frames],
                   "initialization": "simulation_point_cloud_geometry_color_prior", "gaussians": count,
                   "width": width, "height": height, "training_seconds": training_seconds,

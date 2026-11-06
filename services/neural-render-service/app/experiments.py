@@ -20,6 +20,9 @@ from .gaussian.profiles import training_profile
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SERVICE_ROOT.parents[1]
 ASSET_ROOT = REPO_ROOT / "apps/drone-simulator/public/scenes/campus-road"
+BUILDING_SCENE = "campus-building-a-lod0-v1"
+SCENE_ASSETS = {"campus-road-points-v2-spacing-fix": ASSET_ROOT,
+                BUILDING_SCENE: ASSET_ROOT.parent / "campus-building-a"}
 BACKEND = "torch-3dgs-reference"
 
 
@@ -27,9 +30,9 @@ class ExperimentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dataset_id: str = Field(pattern=SAFE_ID, max_length=160)
-    steps: int = Field(default=400, ge=100, le=4000)
-    gaussians: int = Field(default=8000, ge=1000, le=80000)
-    quality_preset: Literal["baseline", "detail"] = "baseline"
+    steps: int = Field(default=400, ge=100, le=12000)
+    gaussians: int = Field(default=8000, ge=1000, le=200000)
+    quality_preset: Literal["baseline", "detail", "building"] = "baseline"
     seed: int = Field(default=20261106, ge=0, le=2**31-1)
     resume_job_id: str | None = Field(default=None, pattern=SAFE_ID, max_length=160)
 
@@ -96,14 +99,17 @@ class ExperimentRunner:
                     raise ValueError("已有实验占用 GPU，请等待当前实验结束")
             dataset = store.get_dataset(request.dataset_id)
             if not dataset: raise KeyError("dataset not found")
-            if dataset.scene_id != "campus-road-points-v2-spacing-fix":
-                raise ValueError("当前实验只支持园区点云场景")
+            assets = SCENE_ASSETS.get(dataset.scene_id)
+            if assets is None:
+                raise ValueError("当前实验只支持已登记的园区或单栋点云场景")
+            if request.quality_preset == "building" and dataset.scene_id != BUILDING_SCENE:
+                raise ValueError("单栋精细档需要单栋楼数据，请重新采集")
             if dataset.status == "draft": raise ValueError("请先完成采集并封存数据集")
             validation = store.validate_dataset(request.dataset_id)
             if not validation or not validation["valid"]: raise ValueError("数据集校验未通过")
             manifest = store.get_manifest(request.dataset_id)
             validate_split(manifest)
-            identity = source_identity(ASSET_ROOT)
+            identity = source_identity(assets)
             captured_source = manifest.get("metadata", {}).get("source_identity")
             if captured_source and captured_source != identity:
                 raise ValueError("采集场景与当前园区点云版本不同，请重新采集")
@@ -113,7 +119,8 @@ class ExperimentRunner:
             output = self.directory(store, job)
             output.mkdir()
             try:
-                config = {"storage": str(store.storage_root), "assets": str(ASSET_ROOT),
+                config = {"storage": str(store.storage_root), "assets": str(assets),
+                          "scene_id": dataset.scene_id,
                           "background": [10/255, 20/255, 27/255], "source_identity": identity,
                           "source_verified_at_capture": bool(captured_source), **request.model_dump()}
                 config["training_profile"] = training_profile(config)

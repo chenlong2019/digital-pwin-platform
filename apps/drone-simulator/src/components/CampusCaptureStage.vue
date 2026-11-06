@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { PointCloudCaptureRenderer } from '@simulation/three-adapter'
-import type { MultiViewCamera, MultiViewPhoto } from '@simulation/three-adapter'
+import type {
+  MultiViewCamera,
+  MultiViewPhoto,
+  PointCloudSceneOptions,
+} from '@simulation/three-adapter'
 import { campusPointCloud } from '../simulation/scenes/campus-scene'
 import { campusCapturePlan } from '../experiments/campus-plan'
 
+const props = defineProps<{ options?: PointCloudSceneOptions; firstView?: MultiViewCamera }>()
 const emit = defineEmits<{ ready: []; error: [message: string] }>()
 const container = ref<HTMLDivElement | null>(null)
 let renderer: PointCloudCaptureRenderer | null = null
@@ -21,12 +26,12 @@ defineExpose({ capture, sourceIdentity })
 
 onMounted(async () => {
   if (!container.value) return
-  const next = new PointCloudCaptureRenderer(container.value, campusPointCloud)
+  const next = new PointCloudCaptureRenderer(container.value, props.options ?? campusPointCloud)
   renderer = next
   try {
     await next.initialize()
     if (disposed) return
-    next.preview(campusCapturePlan()[0]!)
+    next.preview(props.firstView ?? campusCapturePlan()[0]!)
     emit('ready')
   } catch (error) {
     if (!disposed) emit('error', error instanceof Error ? error.message : String(error))

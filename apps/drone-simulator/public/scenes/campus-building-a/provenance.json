@@ -1,0 +1,301 @@
+{
+  "id": "campus-building-a-lod0-v1",
+  "name": "西南独立楼 A",
+  "bounds": {
+    "min": [
+      -117,
+      -0.1,
+      -46
+    ],
+    "max": [
+      -91,
+      37,
+      -14
+    ]
+  },
+  "center": [
+    -104,
+    18,
+    -30
+  ],
+  "sceneScale": 40,
+  "source": "campus-road-v2",
+  "sourceLod": 0,
+  "sourceIndexSha256": "b6fad859dcf0df072ebdc1b556e6923b1584a1840fccfaad80ea803d5fd118e7",
+  "crop": "platform-world inclusive AABB; ground below 0.4m keeps first point per 0.25m XZ cell",
+  "sourceTiles": [
+    {
+      "id": 37,
+      "lod": 0,
+      "sourcePoints": 30419,
+      "selectedPoints": 23663,
+      "compressedSha256": "06dccd9677a8a1bc7dcb9dadff3c9a7e221eaef3f0cc4130a792e14b9e000246",
+      "spacingM": 0.15
+    },
+    {
+      "id": 38,
+      "lod": 0,
+      "sourcePoints": 32535,
+      "selectedPoints": 31523,
+      "compressedSha256": "31777482b0d6906d335f838ded1ab92de267a9911fafabb2147edac62a1050eb",
+      "spacingM": 0.15
+    },
+    {
+      "id": 39,
+      "lod": 0,
+      "sourcePoints": 24918,
+      "selectedPoints": 23906,
+      "compressedSha256": "423939d08944f37602e72d384d310c587abde84eb1d165481890e30c34403742",
+      "spacingM": 0.15
+    },
+    {
+      "id": 55,
+      "lod": 0,
+      "sourcePoints": 35153,
+      "selectedPoints": 31991,
+      "compressedSha256": "629c475d2a84d2321b4c1da621462267ee045d62ac52931e0b8a927e492a50e9",
+      "spacingM": 0.15
+    },
+    {
+      "id": 57,
+      "lod": 0,
+      "sourcePoints": 32027,
+      "selectedPoints": 31973,
+      "compressedSha256": "f28dbe01d18d31693623764dc5e01bd1986f0fa8a9828e37d529096000017fa3",
+      "spacingM": 0.15
+    },
+    {
+      "id": 73,
+      "lod": 0,
+      "sourcePoints": 18403,
+      "selectedPoints": 11788,
+      "compressedSha256": "6f58367a73b5fc2c3da907852bede0edd507be9b0afded08187c9404d8907e67",
+      "spacingM": 0.15
+    },
+    {
+      "id": 74,
+      "lod": 0,
+      "sourcePoints": 36986,
+      "selectedPoints": 31935,
+      "compressedSha256": "fc1bf6cf19ecdca10d653446d747ab064e8c3e7f4a7277433e2f4428b11f3ba9",
+      "spacingM": 0.15
+    },
+    {
+      "id": 75,
+      "lod": 0,
+      "sourcePoints": 37811,
+      "selectedPoints": 11905,
+      "compressedSha256": "f9ffe2529911c84ab199ca39846548ab5176252520ca9c04d0ea43394264edfd",
+      "spacingM": 0.15
+    },
+    {
+      "id": 325,
+      "lod": 0,
+      "sourcePoints": 27462,
+      "selectedPoints": 27462,
+      "compressedSha256": "f4b7266a3dbe7d754e68501f7a25e7c54c739bc4afbc04b5dc965be176af3734",
+      "spacingM": 0.15
+    },
+    {
+      "id": 326,
+      "lod": 0,
+      "sourcePoints": 36544,
+      "selectedPoints": 36544,
+      "compressedSha256": "b93a04a4f1bc08dcc09a13b233def601b8a2d5e21760096075219c7747182114",
+      "spacingM": 0.15
+    },
+    {
+      "id": 327,
+      "lod": 0,
+      "sourcePoints": 27689,
+      "selectedPoints": 27689,
+      "compressedSha256": "69385ac4a8d1447564b475b8e84d555871905d895d9841c147c3f88b84416327",
+      "spacingM": 0.15
+    },
+    {
+      "id": 343,
+      "lod": 0,
+      "sourcePoints": 36566,
+      "selectedPoints": 36566,
+      "compressedSha256": "a8c5cf914236c3fca9aea00c37c4acb0056ba913c14f8ecc33bcdeeb15cad1f7",
+      "spacingM": 0.15
+    },
+    {
+      "id": 345,
+      "lod": 0,
+      "sourcePoints": 36395,
+      "selectedPoints": 36395,
+      "compressedSha256": "71ebb4c5f6368c7a78f054daf22a7c9bc6f229824905950f0fb4f8b28be11f19",
+      "spacingM": 0.15
+    },
+    {
+      "id": 361,
+      "lod": 0,
+      "sourcePoints": 13485,
+      "selectedPoints": 13485,
+      "compressedSha256": "4ee6caf28d0f333583ab294c3ba9c35c73ff6cf9e446762efb64c92aaa02df33",
+      "spacingM": 0.15
+    },
+    {
+      "id": 362,
+      "lod": 0,
+      "sourcePoints": 36527,
+      "selectedPoints": 36527,
+      "compressedSha256": "54671df7497ef61e1e1f95dcfc88359638d84049fd0ee74b5046f911d53993ce",
+      "spacingM": 0.15
+    },
+    {
+      "id": 363,
+      "lod": 0,
+      "sourcePoints": 26255,
+      "selectedPoints": 13556,
+      "compressedSha256": "d8764931734775a2f3d9065b6b37057a9cb8063d1a5a4c232e04ec6928ed2667",
+      "spacingM": 0.15
+    },
+    {
+      "id": 613,
+      "lod": 0,
+      "sourcePoints": 3346,
+      "selectedPoints": 3346,
+      "compressedSha256": "5a48f17c756df41eb32567b7fec1f0f90bfd72bf63856b1a05029c6323751897",
+      "spacingM": 0.15
+    },
+    {
+      "id": 614,
+      "lod": 0,
+      "sourcePoints": 7930,
+      "selectedPoints": 7930,
+      "compressedSha256": "a37125dd4f68641d91458218c9f7af71e3cf50602ee1b76ad0c6a80ad888c52d",
+      "spacingM": 0.15
+    },
+    {
+      "id": 615,
+      "lod": 0,
+      "sourcePoints": 3343,
+      "selectedPoints": 3343,
+      "compressedSha256": "d7bc358707d8acf418204562beda41aaf7397302fec99f25b74522bca62c20e2",
+      "spacingM": 0.15
+    },
+    {
+      "id": 631,
+      "lod": 0,
+      "sourcePoints": 4024,
+      "selectedPoints": 4024,
+      "compressedSha256": "d9526442eebf4969db996994ccb2f5d2be990762e3d35f45374a18c499da589a",
+      "spacingM": 0.15
+    },
+    {
+      "id": 632,
+      "lod": 0,
+      "sourcePoints": 8984,
+      "selectedPoints": 8984,
+      "compressedSha256": "165e79422ff6a04ae91da7d2863496823633564f79aaa10431bf1dac325cb7b2",
+      "spacingM": 0.15
+    },
+    {
+      "id": 633,
+      "lod": 0,
+      "sourcePoints": 4127,
+      "selectedPoints": 4127,
+      "compressedSha256": "bc63141c9c49554aaf9e634a206a25c3634fe16fa73bd126114248c5eb062dae",
+      "spacingM": 0.15
+    },
+    {
+      "id": 649,
+      "lod": 0,
+      "sourcePoints": 1683,
+      "selectedPoints": 1683,
+      "compressedSha256": "d03a6148c8c98d40afb57bbe86d8a42c4fb93674471361ec4c6a8a4cbcc4c027",
+      "spacingM": 0.15
+    },
+    {
+      "id": 650,
+      "lod": 0,
+      "sourcePoints": 4105,
+      "selectedPoints": 4105,
+      "compressedSha256": "85305f62fcb7fa56e34806db39b1df4f43ac3bbbe81796927c2efb95b510a117",
+      "spacingM": 0.15
+    },
+    {
+      "id": 651,
+      "lod": 0,
+      "sourcePoints": 14478,
+      "selectedPoints": 1693,
+      "compressedSha256": "fdb8fe927f15ccce432be8ec1979b87a4053353ca381ad1c7bc2ff530fe8033a",
+      "spacingM": 0.15
+    },
+    {
+      "id": 10037,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 844,
+      "compressedSha256": "af8044c142e52a8113b55fc6f855faf841e6e1b28d265b6e46445df218c60526",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10038,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 2767,
+      "compressedSha256": "fd3cf692f418e8a1820850621d7322bcba4c11d1d9b33961c3416c1ae2bf9664",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10039,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 834,
+      "compressedSha256": "bd4a90ae69559b50f22e80e21e1b0aaf169d3887ccc88a9e4878aca6af1da031",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10055,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 1229,
+      "compressedSha256": "1bee6a8161fcf0fc62b8b0c518adab0dbd542970bb89dc23eb5a7f8fa9336235",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10056,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 4096,
+      "compressedSha256": "c8b599727c57be3e5dbf94c97bac5c29853f72f00b5da3c968f426b1dbda7896",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10057,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 1232,
+      "compressedSha256": "de8a5867611c2b0b9e7a682dbb4a48334a90e4e17c830695432ef5b06e744822",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10073,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 376,
+      "compressedSha256": "56b27b74ce673124de8b493b0ec111793b7e2f3dbc37890d07c9cbcdcc6bbee0",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10074,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 1227,
+      "compressedSha256": "2e024c429ddf1175b415f1492defc14b20ac3b274ef2516a9f97dafc4dbf1db6",
+      "spacingM": 0.05
+    },
+    {
+      "id": 10075,
+      "lod": 0,
+      "sourcePoints": 102400,
+      "selectedPoints": 381,
+      "compressedSha256": "8a67b5dd545c757fdc870d969c1c7b3a60d2d4496f08dc944f3db216dc525fc1",
+      "spacingM": 0.05
+    }
+  ],
+  "points": 479129
+}

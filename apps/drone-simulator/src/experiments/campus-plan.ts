@@ -29,3 +29,39 @@ export function campusCapturePlan(): CampusCaptureView[] {
   }
   return views
 }
+
+/** New, predeclared held-out cameras; no reuse of the campus experiment's views. */
+export function buildingCapturePlan(): CampusCaptureView[] {
+  const views: CampusCaptureView[] = []
+  for (const split of ['train', 'test'] as const) {
+    const rings =
+      split === 'train'
+        ? [
+            { y: 10, target: 14, radius: 46 },
+            { y: 24, target: 18, radius: 46 },
+            { y: 44, target: 23, radius: 46 },
+            { y: 20, target: 20, radius: 34 },
+          ]
+        : [
+            { y: 17, target: 17, radius: 55 },
+            { y: 36, target: 22, radius: 55 },
+          ]
+    const count = split === 'train' ? 16 : 4
+    rings.forEach((ring, ringIndex) => {
+      for (let i = 0; i < count; i++) {
+        const angle = (((i * 360) / count + (split === 'test' ? 14 : 0)) * Math.PI) / 180
+        views.push({
+          id: `building-${split}-${ringIndex}-${i.toString().padStart(2, '0')}`,
+          split,
+          position: {
+            x: -104 + ring.radius * Math.sin(angle),
+            y: ring.y,
+            z: -30 + ring.radius * Math.cos(angle),
+          },
+          target: { x: -104, y: ring.target, z: -30 },
+        })
+      }
+    })
+  }
+  return views
+}

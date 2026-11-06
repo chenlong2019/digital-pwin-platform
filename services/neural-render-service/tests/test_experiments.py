@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from app.experiments import ASSET_ROOT, ExperimentRunner
+from app.experiments import ASSET_ROOT, BUILDING_SCENE, SCENE_ASSETS, ExperimentRunner
 from app.gaussian.source import source_identity
 from app.models import DatasetCreate, DatasetFrameUpload
 from app.store import PersistentStore
@@ -51,6 +51,31 @@ def test_draft_and_wrong_scene_cannot_start(experiment_service):
     assert client.post("/api/v1/experiments", json={"dataset_id": "campus"}).status_code == 400
     store.create_dataset(DatasetCreate(dataset_id="other", name="other", scene_id="other", status="ready"))
     assert client.post("/api/v1/experiments", json={"dataset_id": "other"}).status_code == 400
+    assert client.post("/api/v1/experiments", json={"dataset_id": "campus", "quality_preset": "building"}).status_code == 400
+
+
+def test_building_uses_its_own_source_and_snapshots_surface_profile(experiment_service, monkeypatch, png_url, frame_factory):
+    fake_worker(monkeypatch)
+    store, client, runner = (experiment_service[k] for k in ["store", "client", "runner"])
+    identity = source_identity(SCENE_ASSETS[BUILDING_SCENE])
+    store.create_dataset(DatasetCreate(dataset_id="building", name="building", scene_id=BUILDING_SCENE,
+                                      metadata={"source_identity": identity}))
+    for i in range(10):
+        frame = frame_factory(f"building-{i}", i)
+        frame.update(width=64, height=64, imageDataUrl=png_url(64, 64, i),
+                     cameraIntrinsics={"width": 64, "height": 64, "fx": 50, "fy": 50, "cx": 32, "cy": 32},
+                     metadata={"split": "train" if i < 8 else "test"})
+        store.add_frame("building", DatasetFrameUpload.model_validate(frame))
+    store.finalize_dataset("building")
+    response = client.post("/api/v1/experiments", json={"dataset_id": "building", "quality_preset": "building",
+                                                     "steps": 6000, "gaussians": 180000})
+    assert response.status_code == 202, response.text
+    job = store.get_job(response.json()["job_id"])
+    config = json.loads((runner.directory(store, job)/"config.json").read_text())
+    assert config["source_identity"] == identity
+    assert config["source_identity"] != source_identity(ASSET_ROOT)
+    assert config["training_profile"]["scene_scale"] == 40
+    assert config["training_profile"]["surface_initialization"] is True
 
 
 def test_job_progress_and_artifacts_survive_service_restart(experiment_service, monkeypatch):

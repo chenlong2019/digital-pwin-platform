@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import CampusCaptureStage from '../components/CampusCaptureStage.vue'
 import { CAPTURE_SERVICE_URL, serviceRequest } from '../capture/api'
-import { campusCapturePlan } from '../experiments/campus-plan'
-import { CAMPUS_SCENE_ID } from '../simulation/scenes/campus-scene'
+import { buildingCapturePlan, campusCapturePlan } from '../experiments/campus-plan'
+import { BUILDING_SCENE_ID, buildingPointCloud } from '../experiments/building-scene'
+import { CAMPUS_SCENE_ID, campusPointCloud } from '../simulation/scenes/campus-scene'
+
+type QualityPreset = 'baseline' | 'detail' | 'building'
 
 interface ExperimentJob {
   job_id: string
@@ -15,7 +18,7 @@ interface ExperimentJob {
     steps: number
     gaussians: number
     seed: number
-    quality_preset?: 'baseline' | 'detail'
+    quality_preset?: QualityPreset
   }
   result: { stage?: string; step?: number; steps?: number; loss?: number } | null
 }
@@ -29,7 +32,7 @@ interface TestView {
 }
 interface ExperimentReport {
   backend: string
-  quality_preset?: 'baseline' | 'detail'
+  quality_preset?: QualityPreset
   previous_run_comparison?: {
     baseline_job_id: string
     baseline_quality: { psnr: number; foreground_psnr: number | null; ssim: number }
@@ -56,18 +59,33 @@ interface ExperimentReport {
 const storageKey = 'campus.experiment.active'
 const route = useRoute()
 const router = useRouter()
-const plan = campusCapturePlan()
 const stage = ref<InstanceType<typeof CampusCaptureStage> | null>(null)
 const resultsSection = ref<HTMLElement | null>(null)
 const sceneReady = ref(false)
 const connected = ref(false)
 const connecting = ref(false)
 const gpu = ref('')
-const qualityPreset = ref<'baseline' | 'detail'>('detail')
-const steps = ref(2400)
-const gaussians = ref(48000)
+const qualityPreset = ref<QualityPreset>('building')
+const isBuilding = computed(() => qualityPreset.value === 'building')
+const plan = computed(() => (isBuilding.value ? buildingCapturePlan() : campusCapturePlan()))
+const sceneId = computed(() => (isBuilding.value ? BUILDING_SCENE_ID : CAMPUS_SCENE_ID))
+const sceneOptions = computed(() => (isBuilding.value ? buildingPointCloud : campusPointCloud))
+const frozenLod = computed(() => (isBuilding.value ? 0 : 3))
+const steps = ref(6000)
+const gaussians = ref(180000)
+watch(
+  sceneId,
+  () => {
+    sceneReady.value = false
+  },
+  { flush: 'sync' },
+)
 const captureSize = computed(() =>
-  qualityPreset.value === 'detail' ? { width: 512, height: 384 } : { width: 256, height: 192 },
+  isBuilding.value
+    ? { width: 1024, height: 768 }
+    : qualityPreset.value === 'detail'
+      ? { width: 512, height: 384 }
+      : { width: 256, height: 192 },
 )
 const imageDialog = ref<HTMLDialogElement | null>(null)
 const enlargedImage = ref<'reference_image' | 'prediction_image' | 'difference_image'>(
@@ -107,7 +125,7 @@ const phase = computed(() =>
 )
 const progress = computed(() =>
   capturing.value
-    ? Math.round((captured.value / plan.length) * 100)
+    ? Math.round((captured.value / plan.value.length) * 100)
     : job.value?.result?.steps
       ? Math.round(((job.value.result.step ?? 0) / job.value.result.steps) * 100)
       : 0,
@@ -155,8 +173,8 @@ function showResults(): void {
 }
 
 function applyPreset(): void {
-  steps.value = qualityPreset.value === 'detail' ? 2400 : 400
-  gaussians.value = qualityPreset.value === 'detail' ? 48000 : 8000
+  steps.value = isBuilding.value ? 6000 : qualityPreset.value === 'detail' ? 2400 : 400
+  gaussians.value = isBuilding.value ? 180000 : qualityPreset.value === 'detail' ? 48000 : 8000
 }
 
 function enlargeImage(kind: typeof enlargedImage.value): void {
@@ -247,25 +265,32 @@ async function start(resumeCapture = false): Promise<void> {
       datasetId.value = ''
       await router.replace({ query: {} })
       const scenes = await serviceRequest<Array<{ scene_id: string }>>('/api/v1/scenes')
-      if (!scenes.some((scene) => scene.scene_id === CAMPUS_SCENE_ID))
+      if (!scenes.some((scene) => scene.scene_id === sceneId.value))
         await serviceRequest('/api/v1/scenes', {
-          sceneId: CAMPUS_SCENE_ID,
-          name: '园区点云',
+          sceneId: sceneId.value,
+          name: isBuilding.value ? '西南独立楼 A' : '园区点云',
           coordinate_frame: 'platform-world',
           metadata: { source: 'campus-road-v2', synthetic: true },
         })
       datasetId.value = `campus-${Date.now()}`
       await serviceRequest('/api/v1/datasets', {
         datasetId: datasetId.value,
-        name: qualityPreset.value === 'detail' ? '园区 3DGS 高清实验' : '园区 3DGS 基线实验',
-        sceneId: CAMPUS_SCENE_ID,
-        sceneVersion: 'lod3-fixed',
+        name: isBuilding.value
+          ? '单栋楼 3DGS 精细实验'
+          : qualityPreset.value === 'detail'
+            ? '园区 3DGS 高清实验'
+            : '园区 3DGS 基线实验',
+        sceneId: sceneId.value,
+        sceneVersion: `lod${frozenLod.value}-fixed`,
         metadata: {
           workflow: 'campus-3dgs',
-          capturePlan: plan,
+          capturePlan: plan.value,
           source: 'simulation-point-cloud',
           cameraConvention: 'opengl-camera-to-world',
-          frozenLod: 3,
+          frozenLod: frozenLod.value,
+          pointAppearance: isBuilding.value
+            ? 'opaque-overlapping-discs-1.7-raw-rgb'
+            : 'lit-point-discs-0.95',
           quality_preset: qualityPreset.value,
           captureResolution: captureSize.value,
           source_identity: stage.value.sourceIdentity(),
@@ -275,9 +300,15 @@ async function start(resumeCapture = false): Promise<void> {
       persist()
     }
     const manifest = await serviceRequest<{
-      metadata?: { quality_preset?: string }
+      metadata?: { quality_preset?: string; source_identity?: unknown }
       frames: Array<{ frameId: string; width: number; height: number }>
     }>(`/api/v1/datasets/${datasetId.value}/manifest`)
+    if (
+      manifest.metadata?.source_identity &&
+      JSON.stringify(manifest.metadata.source_identity) !==
+        JSON.stringify(stage.value.sourceIdentity())
+    )
+      throw new Error('继续采集需要同一栋楼和同一源点云，请切回原档位或开始完整实验。')
     if (
       manifest.frames.some(
         (frame) =>
@@ -287,12 +318,12 @@ async function start(resumeCapture = false): Promise<void> {
       throw new Error('继续采集需保持原分辨率，请切回原画质档位，或开始完整实验重新采集。')
     const existing = new Set(manifest.frames.map((frame) => frame.frameId))
     captured.value = existing.size
-    for (let i = 0; i < plan.length; i++) {
+    for (let i = 0; i < plan.value.length; i++) {
       if (disposed || captureStop) {
         message.value = '采集已暂停，可继续已保存的进度。'
         return
       }
-      const view = plan[i]!
+      const view = plan.value[i]!
       const frameId = `${datasetId.value}-${view.id}`
       if (existing.has(frameId)) continue
       const shot = stage.value.capture(view, captureSize.value.width, captureSize.value.height)
@@ -305,10 +336,15 @@ async function start(resumeCapture = false): Promise<void> {
         capturedAt: new Date().toISOString(),
         cameraPose: shot.pose,
         cameraIntrinsics: shot.intrinsics,
-        metadata: { split: view.split, captureIndex: i, cameraConvention: 'opengl', frozenLod: 3 },
+        metadata: {
+          split: view.split,
+          captureIndex: i,
+          cameraConvention: 'opengl',
+          frozenLod: frozenLod.value,
+        },
       })
       captured.value++
-      message.value = `已采集 ${captured.value} / ${plan.length} 个视角`
+      message.value = `已采集 ${captured.value} / ${plan.value.length} 个视角`
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
     if (disposed || captureStop) {
@@ -363,7 +399,7 @@ async function connect(): Promise<void> {
       if (saved.jobId) await loadJob(saved.jobId)
       else {
         const manifest = await serviceRequest<{
-          metadata?: { quality_preset?: 'baseline' | 'detail' }
+          metadata?: { quality_preset?: QualityPreset }
           frames: unknown[]
         }>(`/api/v1/datasets/${saved.datasetId}/manifest`)
         qualityPreset.value = manifest.metadata?.quality_preset ?? 'baseline'
@@ -405,7 +441,7 @@ onBeforeUnmount(() => {
     <header class="experiment-header">
       <div>
         <p class="eyebrow">神经渲染 / 算法验证</p>
-        <h1 id="experiment-title">园区 3DGS 实验</h1>
+        <h1 id="experiment-title">{{ isBuilding ? '单栋楼 3DGS 实验' : '园区 3DGS 实验' }}</h1>
         <p class="subtitle">采集、重建与独立测试，在一次实验中完成。</p>
       </div>
       <nav>
@@ -432,12 +468,19 @@ onBeforeUnmount(() => {
     <div class="experiment-grid">
       <section class="preview-card">
         <div class="section-head">
-          <h2>园区采集预览</h2>
+          <h2>{{ isBuilding ? '西南独立楼 A · 精细采集' : '园区采集预览' }}</h2>
           <span>{{ sceneReady ? '场景就绪' : '载入中' }}</span>
         </div>
-        <CampusCaptureStage ref="stage" @ready="sceneReady = true" @error="error = $event" />
+        <CampusCaptureStage
+          :key="sceneId"
+          ref="stage"
+          :options="sceneOptions"
+          :first-view="plan[0]"
+          @ready="sceneReady = true"
+          @error="error = $event"
+        />
         <div class="capture-summary">
-          <span>32 个训练视角</span><span>8 个独立测试视角</span
+          <span>{{ isBuilding ? 64 : 32 }} 个训练视角</span><span>8 个独立测试视角</span
           ><span>{{ captureSize.width }} × {{ captureSize.height }} 采集</span>
         </div>
         <p class="note">
@@ -461,15 +504,18 @@ onBeforeUnmount(() => {
             data-testid="experiment-preset"
             @change="applyPreset"
           >
+            <option value="building">单栋精细 · 1024 × 768 / LOD0</option>
             <option value="detail">高清 · 512 × 384 / 4.8 万高斯</option>
             <option value="baseline">快速基线 · 256 × 192 / 8 千高斯</option>
           </select></label
         >
         <p class="note preset-note">
           {{
-            qualityPreset === 'detail'
-              ? '提高真实采集分辨率与模型密度，增加前景训练。训练和渲染耗时更长。'
-              : '用于快速检查流程，建筑边缘与细节较粗。'
+            isBuilding
+              ? '只重建西南独立楼 A。原始高精度点云、近景多高度采集，18 万高斯上限；实际数量由体素采样决定。'
+              : qualityPreset === 'detail'
+                ? '提高真实采集分辨率与模型密度，增加前景训练。训练和渲染耗时更长。'
+                : '用于快速检查流程，建筑边缘与细节较粗。'
           }}
         </p>
         <label
@@ -478,6 +524,9 @@ onBeforeUnmount(() => {
             <option :value="1200">1200 · 更充分训练</option>
             <option :value="2400">2400 · 高清训练</option>
             <option :value="4000">4000 · 延长训练</option>
+            <option :value="6000">6000 · 单栋精细</option>
+            <option :value="8000">8000 · 继续优化</option>
+            <option :value="12000">12000 · 长时间训练</option>
           </select></label
         >
         <label
@@ -485,7 +534,7 @@ onBeforeUnmount(() => {
             v-model.number="gaussians"
             type="number"
             min="1000"
-            max="80000"
+            max="200000"
             step="1000"
             :disabled="busy"
         /></label>

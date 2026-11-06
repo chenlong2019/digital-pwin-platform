@@ -2,9 +2,32 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { SandboxScene } from '@simulation/three-adapter'
-import { campusCapturePlan } from '../experiments/campus-plan'
+import { buildingCapturePlan, campusCapturePlan } from '../experiments/campus-plan'
 
 describe('园区实验视角划分', () => {
+  it('单栋楼使用新的近景轨迹，测试相机与训练隔离且覆盖楼体高度', () => {
+    const plan = buildingCapturePlan()
+    const train = plan.filter((view) => view.split === 'train')
+    const test = plan.filter((view) => view.split === 'test')
+    expect(train).toHaveLength(64)
+    expect(test).toHaveLength(8)
+    expect(new Set(plan.map((view) => view.id)).size).toBe(72)
+    expect(plan).toEqual(buildingCapturePlan())
+    for (const view of test) {
+      expect(
+        train.some((item) => JSON.stringify(item.position) === JSON.stringify(view.position)),
+      ).toBe(false)
+      const camera = new THREE.PerspectiveCamera(58, 4 / 3, 0.1, 2000)
+      camera.position.set(view.position.x, view.position.y, view.position.z)
+      camera.lookAt(view.target.x, view.target.y, view.target.z)
+      camera.updateMatrixWorld(true)
+      for (const y of [0, 18, 36]) {
+        const projected = new THREE.Vector3(-104, y, -30).project(camera)
+        expect(Math.abs(projected.x)).toBeLessThan(1)
+        expect(Math.abs(projected.y)).toBeLessThan(1)
+      }
+    }
+  })
   it('在采集之前固定训练和测试相机，角度与高度均独立', () => {
     const plan = campusCapturePlan()
     expect(plan).toEqual(campusCapturePlan())

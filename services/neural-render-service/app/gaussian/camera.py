@@ -63,8 +63,8 @@ def validate_split(manifest: dict) -> tuple[list[dict], list[dict]]:
     if len(sizes) != 1:
         raise ValueError("All experiment images must share one resolution")
     width, height = next(iter(sizes))
-    if not (64 <= width <= 512 and 64 <= height <= 512) or width % 16 or height % 16:
-        raise ValueError("Experiment resolution must be 64..512 pixels and divisible by 16")
+    if not (64 <= width <= 1024 and 64 <= height <= 1024) or width % 16 or height % 16:
+        raise ValueError("Experiment resolution must be 64..1024 pixels and divisible by 16")
     if len(train) + len(test) > 128:
         raise ValueError("Reference experiment supports at most 128 views")
     return train, test
