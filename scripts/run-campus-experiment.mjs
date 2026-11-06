@@ -31,7 +31,8 @@ try {
       body: JSON.stringify({
         dataset_id: options.dataset,
         steps: Number(options.steps ?? 400),
-        gaussians: 8000,
+        gaussians: Number(options.gaussians ?? (options.preset === 'detail' ? 48000 : 8000)),
+        quality_preset: options.preset ?? 'baseline',
       }),
     })
     const result = await response.json()
@@ -53,7 +54,9 @@ try {
       null,
       { timeout: 60_000 },
     )
+    if (options.preset) await page.getByTestId('experiment-preset').selectOption(options.preset)
     if (options.steps) await page.getByTestId('experiment-steps').selectOption(options.steps)
+    if (options.gaussians) await page.locator('input[type="number"]').fill(options.gaussians)
     await button.click()
   }
   await page.waitForFunction(
@@ -122,7 +125,10 @@ try {
       await page.screenshot({ path: path.join(destination, 'console.png'), fullPage: true })
       await page.getByRole('button', { name: '查看结果 ↓' }).click()
       await page.screenshot({ path: path.join(destination, 'results.png') })
-      for (const name of ['report.json', 'comparison.png', 'model.ply']) {
+      const names = ['report.json', 'comparison.png', 'model.ply']
+      if (report.previous_run_comparison)
+        names.push('baseline-comparison.json', report.previous_run_comparison.image)
+      for (const name of names) {
         const artifact = await fetch(base + name)
         assert.equal(artifact.ok, true)
         await writeFile(path.join(destination, name), Buffer.from(await artifact.arrayBuffer()))

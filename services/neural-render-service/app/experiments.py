@@ -8,12 +8,14 @@ import shutil
 import subprocess
 import sys
 import threading
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .models import Job, SAFE_ID, utc_now
 from .gaussian.camera import validate_split
 from .gaussian.source import source_identity
+from .gaussian.profiles import training_profile
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SERVICE_ROOT.parents[1]
@@ -25,8 +27,9 @@ class ExperimentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dataset_id: str = Field(pattern=SAFE_ID, max_length=160)
-    steps: int = Field(default=400, ge=100, le=2000)
-    gaussians: int = Field(default=8000, ge=1000, le=20000)
+    steps: int = Field(default=400, ge=100, le=4000)
+    gaussians: int = Field(default=8000, ge=1000, le=80000)
+    quality_preset: Literal["baseline", "detail"] = "baseline"
     seed: int = Field(default=20261106, ge=0, le=2**31-1)
     resume_job_id: str | None = Field(default=None, pattern=SAFE_ID, max_length=160)
 
@@ -113,6 +116,7 @@ class ExperimentRunner:
                 config = {"storage": str(store.storage_root), "assets": str(ASSET_ROOT),
                           "background": [10/255, 20/255, 27/255], "source_identity": identity,
                           "source_verified_at_capture": bool(captured_source), **request.model_dump()}
+                config["training_profile"] = training_profile(config)
                 (output/"manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
                 if request.resume_job_id:
                     previous = store.get_job(request.resume_job_id)
@@ -123,6 +127,8 @@ class ExperimentRunner:
                     if request.gaussians != previous.request["gaussians"] or request.seed != previous.request["seed"]:
                         raise ValueError("恢复时需保持相同的高斯数量与随机种子")
                     old_config = json.loads((old/"config.json").read_text(encoding="utf-8"))
+                    if config["training_profile"] != old_config.get("training_profile", training_profile(old_config)):
+                        raise ValueError("恢复时需保持相同的画质档位与训练配置")
                     if old_config.get("source_identity") != identity:
                         raise ValueError("恢复时必须使用同一版本的源点云")
                     shutil.copy2(old/"checkpoint.pt", output/"checkpoint.pt")
@@ -175,7 +181,8 @@ class ExperimentRunner:
 
     def artifact(self, store, job: Job, name: str) -> Path:
         if job.backend != BACKEND or not re.fullmatch(r"[a-zA-Z0-9._-]+", name): raise KeyError("artifact not found")
-        allowed = {"report.json", "comparison.png", "model.ply", "worker.log", "checkpoint.pt", "manifest.json"}
+        allowed = {"report.json", "comparison.png", "quality-comparison.png", "baseline-comparison.json",
+                   "model.ply", "worker.log", "checkpoint.pt", "manifest.json"}
         if name not in allowed and not re.fullmatch(r"[a-zA-Z0-9._-]+-(reference|prediction|difference)\.png", name):
             raise KeyError("artifact not found")
         path = self.directory(store, job) / name

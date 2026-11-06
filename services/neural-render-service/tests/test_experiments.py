@@ -38,7 +38,7 @@ def fake_worker(monkeypatch):
 
 def test_experiment_requests_validate_options_without_launching_a_worker(experiment_service):
     client = experiment_service["client"]
-    for body in [{"steps": 1}, {"gaussians": 999999}, {"unknown": True}]:
+    for body in [{"steps": 1}, {"gaussians": 999999}, {"quality_preset": "unknown"}, {"unknown": True}]:
         assert client.post("/api/v1/experiments", json={"dataset_id": "campus", **body}).status_code == 422
         assert client.post("/api/v1/jobs/train", json={"dataset_id": "campus", "options": {
             "workflow": "campus-3dgs", **body}}).status_code == 422
@@ -96,6 +96,29 @@ def test_resume_preserves_manifest_bytes_and_rejects_changed_source(experiment_s
     result = client.post("/api/v1/experiments", json={"dataset_id": "campus", "resume_job_id": job_id})
     assert result.status_code == 400
     assert "源点云" in result.json()["detail"]
+
+
+def test_detail_profile_is_snapshotted_and_resume_cannot_change_it(experiment_service, monkeypatch):
+    fake_worker(monkeypatch)
+    store, runner, client = (experiment_service[key] for key in ["store", "runner", "client"])
+    result = client.post("/api/v1/experiments", json={"dataset_id": "campus", "quality_preset": "detail",
+                                                  "gaussians": 48000, "steps": 2400})
+    assert result.status_code == 202, result.text
+    job_id = result.json()["job_id"]
+    output = runner.directory(store, store.get_job(job_id))
+    config = json.loads((output/"config.json").read_text())
+    assert config["training_profile"]["voxel_size_m"] == 0.6
+    assert config["training_profile"]["foreground_tiles"] == 24
+    (output/"checkpoint.pt").write_bytes(b"detail-checkpoint")
+    monkeypatch.setattr("app.experiments.process_alive", lambda pid: False)
+    options = {"dataset_id": "campus", "resume_job_id": job_id, "gaussians": 48000, "steps": 4000}
+    incompatible = client.post("/api/v1/experiments", json=options)
+    assert incompatible.status_code == 400
+    assert "画质档位" in incompatible.json()["detail"]
+    compatible = client.post("/api/v1/experiments", json={**options, "quality_preset": "detail"})
+    assert compatible.status_code == 202, compatible.text
+    resumed = runner.directory(store, store.get_job(compatible.json()["job_id"]))
+    assert (resumed/"checkpoint.pt").read_bytes() == b"detail-checkpoint"
 
 
 def test_legacy_training_route_remains_explicit_placeholder(experiment_service):

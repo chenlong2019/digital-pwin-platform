@@ -10,9 +10,9 @@ const container = ref<HTMLDivElement | null>(null)
 let renderer: PointCloudCaptureRenderer | null = null
 let disposed = false
 
-function capture(view: MultiViewCamera): MultiViewPhoto {
+function capture(view: MultiViewCamera, width: number, height: number): MultiViewPhoto {
   if (!renderer) throw new Error('采集场景尚未就绪')
-  return renderer.capture(view)
+  return renderer.capture(view, width, height)
 }
 function sourceIdentity() {
   return renderer?.sourceIdentity() ?? null
@@ -26,7 +26,7 @@ onMounted(async () => {
   try {
     await next.initialize()
     if (disposed) return
-    next.capture(campusCapturePlan()[0]!)
+    next.preview(campusCapturePlan()[0]!)
     emit('ready')
   } catch (error) {
     if (!disposed) emit('error', error instanceof Error ? error.message : String(error))

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from app.gaussian.camera import frame_camera, validate_split
+from app.gaussian.compare import match_cameras
 
 
 def frame(index=0, split="train"):
@@ -33,6 +34,25 @@ def test_rotated_camera_and_scene_normalization_keep_the_same_projection():
     camera = frame_camera(item, origin, scale)
     view = camera["rotation"] @ ((np.array([-7, 1, 3])-origin)/scale) + camera["translation"]
     np.testing.assert_allclose(view*scale, [2, 1, 10], atol=1e-5)
+
+
+def test_quality_comparison_matches_physical_cameras_across_resolutions_and_rejects_changed_views():
+    previous = [frame(i) for i in range(2)]
+    current = deepcopy(previous[::-1])
+    for item in current:
+        item["frameId"] += "-hd"
+        item["width"] *= 2; item["height"] *= 2
+        for key in ["width", "height", "fx", "fy", "cx", "cy"]:
+            item["cameraIntrinsics"][key] *= 2
+        item["cameraPose"]["quaternionXyzw"]["w"] = -1
+    assert match_cameras(previous, current) == previous[::-1]
+    current[0]["cameraIntrinsics"]["fx"] += 10
+    with pytest.raises(ValueError, match="normalized calibration"):
+        match_cameras(previous, current)
+    current[0]["cameraIntrinsics"]["fx"] -= 10
+    current[0]["cameraPose"]["positionM"]["x"] += 0.01
+    with pytest.raises(ValueError, match="poses"):
+        match_cameras(previous, current)
 
 
 @pytest.mark.parametrize("damage", ["same-pose", "opposite-quaternion", "same-id", "missing-split", "resolution", "distortion"])

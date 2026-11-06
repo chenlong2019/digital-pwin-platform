@@ -18,6 +18,7 @@ from .camera import frame_camera, validate_split
 from .metrics import image_metrics, ssim
 from .renderer import GaussianModel
 from .source import source_identity
+from .profiles import training_profile
 
 BACKEND = "torch-3dgs-reference"
 
@@ -28,7 +29,7 @@ def write_json(path: Path, value) -> None:
     os.replace(temporary, path)
 
 
-def point_prior(asset_root: Path, count: int, seed: int) -> tuple[np.ndarray, np.ndarray, float]:
+def point_prior(asset_root: Path, count: int, seed: int, voxel_size: float = 2.0) -> tuple[np.ndarray, np.ndarray, float]:
     index = json.loads((asset_root / "index.json").read_text(encoding="utf-8"))
     raw = gzip.decompress((asset_root / index["overview"]["file"]).read_bytes())
     if hashlib.sha256(raw).hexdigest() != index["overview"]["sha256"]:
@@ -43,7 +44,6 @@ def point_prior(asset_root: Path, count: int, seed: int) -> tuple[np.ndarray, np
         xyz[:, 2] *= -1
         positions.append(xyz.astype(np.float32)); colors.append(data["rgb"].astype(np.float32)/255)
     positions, colors = np.concatenate(positions), np.concatenate(colors)
-    voxel_size = 2.0
     _, inverse, counts = np.unique(np.floor(positions/voxel_size).astype(np.int32), axis=0,
                                    return_inverse=True, return_counts=True)
     means = np.zeros((len(counts), 3), np.float64)
@@ -119,15 +119,16 @@ def run(config_path: Path):
         # Test images are loaded only during final evaluation, never by training.
         origin = np.array([0, 25, -105], np.float32)
         scene_scale = 150.0
-        means, colors, voxel_size = point_prior(Path(config["assets"]), config["gaussians"], seed)
+        profile = config.get("training_profile", training_profile(config))
+        means, colors, voxel_size = point_prior(Path(config["assets"]), config["gaussians"], seed, profile["voxel_size_m"])
         count = len(means)
         means = torch.tensor((means-origin)/scene_scale, device=device)
         model = GaussianModel(means, torch.tensor(colors, device=device),
-                              torch.full((count, 3), voxel_size*0.55/scene_scale, device=device))
+                              torch.full((count, 3), voxel_size*profile["scale_factor"]/scene_scale, device=device))
         initial_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
         background = torch.tensor(config["background"], device=device)
         optimizer = torch.optim.Adam([
-            {"params": [model.means], "lr": 0.00015},
+            {"params": [model.means], "lr": profile["position_lr"]},
             {"params": [model.colors], "lr": 0.025},
             {"params": [model.log_scales], "lr": 0.006},
             {"params": [model.quaternions], "lr": 0.002},
@@ -141,6 +142,9 @@ def run(config_path: Path):
                 raise ValueError("Resume requires exactly the same sealed dataset")
             if checkpoint.get("source_identity") != identity:
                 raise ValueError("Resume requires exactly the same source point cloud")
+            saved_config = checkpoint["config"]
+            if profile != saved_config.get("training_profile", training_profile(saved_config)):
+                raise ValueError("Resume requires exactly the same training profile")
             model.load_state_dict(checkpoint["model"]); optimizer.load_state_dict(checkpoint["optimizer"])
             initial_state = checkpoint["initial_state"]
             start_step, history = checkpoint["step"], checkpoint["history"]
@@ -180,9 +184,9 @@ def run(config_path: Path):
                            "error": "实验已停止，当前进度已保存，可从检查点恢复"})
                 return
             view = int(torch.randint(len(cameras), (1,)).item())
-            selected = torch.randint(rows*columns, (2,), device=device)
+            selected = torch.randint(rows*columns, (profile["random_tiles"],), device=device)
             occupied = foreground_tiles[view]
-            if len(occupied): selected = torch.cat([selected, occupied[torch.randint(len(occupied), (6,), device=device)]])
+            if len(occupied): selected = torch.cat([selected, occupied[torch.randint(len(occupied), (profile["foreground_tiles"],), device=device)]])
             optimizer.zero_grad(set_to_none=True)
             predicted = model.render_tiles(model.project(cameras[view]), cameras[view], selected, background)
             reference = patches[view][selected]
@@ -194,7 +198,7 @@ def run(config_path: Path):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
             optimizer.step()
-            with torch.no_grad(): model.log_scales.clamp_(math.log(0.05/scene_scale), math.log(12/scene_scale))
+            with torch.no_grad(): model.log_scales.clamp_(math.log(0.05/scene_scale), math.log(profile["max_scale_m"]/scene_scale))
             if (step+1) % 20 == 0 or step+1 == config["steps"]:
                 row = {"step": step+1, "loss": float(loss.detach()), "l1": float(l1.detach())}
                 history.append(row)
@@ -207,7 +211,7 @@ def run(config_path: Path):
         training_seconds = previous_seconds+time.perf_counter()-started
         progress("evaluating", config["steps"])
         initial = GaussianModel(means.detach().clone(), torch.tensor(colors, device=device),
-                                torch.full((count, 3), voxel_size*0.55/scene_scale, device=device))
+                                torch.full((count, 3), voxel_size*profile["scale_factor"]/scene_scale, device=device))
         initial.load_state_dict(initial_state)
         metrics, benchmark_cameras = [], []
         with torch.no_grad():
@@ -242,6 +246,7 @@ def run(config_path: Path):
                   "manifest_sha256": manifest_hash, "source_identity": identity,
                   "source_verified_at_capture": config.get("source_verified_at_capture", False),
                   "seed": seed, "steps": config["steps"], "resumed_from_step": start_step,
+                  "quality_preset": profile["name"], "training_profile": profile,
                   "train_frames": [f["frameId"] for f in train_frames], "test_frames": [f["frameId"] for f in test_frames],
                   "initialization": "simulation_point_cloud_geometry_color_prior", "gaussians": count,
                   "width": width, "height": height, "training_seconds": training_seconds,

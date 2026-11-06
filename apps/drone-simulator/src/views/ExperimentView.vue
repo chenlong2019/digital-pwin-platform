@@ -10,7 +10,13 @@ interface ExperimentJob {
   job_id: string
   status: 'queued' | 'running' | 'completed' | 'failed'
   error: string | null
-  request: { dataset_id: string; steps: number; gaussians: number; seed: number }
+  request: {
+    dataset_id: string
+    steps: number
+    gaussians: number
+    seed: number
+    quality_preset?: 'baseline' | 'detail'
+  }
   result: { stage?: string; step?: number; steps?: number; loss?: number } | null
 }
 interface TestView {
@@ -23,6 +29,13 @@ interface TestView {
 }
 interface ExperimentReport {
   backend: string
+  quality_preset?: 'baseline' | 'detail'
+  previous_run_comparison?: {
+    baseline_job_id: string
+    baseline_quality: { psnr: number; foreground_psnr: number | null; ssim: number }
+    image: string
+    views: Array<{ frame_id: string; baseline_image: string }>
+  }
   width: number
   height: number
   gaussians: number
@@ -50,8 +63,16 @@ const sceneReady = ref(false)
 const connected = ref(false)
 const connecting = ref(false)
 const gpu = ref('')
-const steps = ref(400)
-const gaussians = ref(8000)
+const qualityPreset = ref<'baseline' | 'detail'>('detail')
+const steps = ref(2400)
+const gaussians = ref(48000)
+const captureSize = computed(() =>
+  qualityPreset.value === 'detail' ? { width: 512, height: 384 } : { width: 256, height: 192 },
+)
+const imageDialog = ref<HTMLDialogElement | null>(null)
+const enlargedImage = ref<'reference_image' | 'prediction_image' | 'difference_image'>(
+  'prediction_image',
+)
 const datasetId = ref('')
 const job = ref<ExperimentJob | null>(null)
 const report = ref<ExperimentReport | null>(null)
@@ -92,6 +113,12 @@ const progress = computed(() =>
       : 0,
 )
 const currentView = computed(() => report.value?.views[selectedView.value])
+const previousView = computed(() =>
+  report.value?.previous_run_comparison?.views.find(
+    (view) => view.frame_id === currentView.value?.frame_id,
+  ),
+)
+const comparePrevious = ref(false)
 const stageLabel = computed(
   () =>
     ({
@@ -127,6 +154,16 @@ function showResults(): void {
   resultsSection.value?.focus({ preventScroll: true })
 }
 
+function applyPreset(): void {
+  steps.value = qualityPreset.value === 'detail' ? 2400 : 400
+  gaussians.value = qualityPreset.value === 'detail' ? 48000 : 8000
+}
+
+function enlargeImage(kind: typeof enlargedImage.value): void {
+  enlargedImage.value = kind
+  imageDialog.value?.showModal()
+}
+
 async function loadJob(id: string): Promise<void> {
   if (polling || disposed) return
   polling = true
@@ -137,6 +174,7 @@ async function loadJob(id: string): Promise<void> {
     datasetId.value = next.request.dataset_id
     steps.value = next.request.steps
     gaussians.value = next.request.gaussians
+    qualityPreset.value = next.request.quality_preset ?? 'baseline'
     connected.value = true
     error.value = ''
     persist()
@@ -176,6 +214,10 @@ async function train(resume = false): Promise<void> {
       dataset_id: datasetId.value,
       steps: steps.value,
       gaussians: gaussians.value,
+      quality_preset:
+        resume && job.value
+          ? (job.value.request.quality_preset ?? 'baseline')
+          : qualityPreset.value,
       ...(resume && job.value
         ? { resume_job_id: job.value.job_id, seed: job.value.request.seed }
         : {}),
@@ -215,7 +257,7 @@ async function start(resumeCapture = false): Promise<void> {
       datasetId.value = `campus-${Date.now()}`
       await serviceRequest('/api/v1/datasets', {
         datasetId: datasetId.value,
-        name: '园区 3DGS 基线实验',
+        name: qualityPreset.value === 'detail' ? '园区 3DGS 高清实验' : '园区 3DGS 基线实验',
         sceneId: CAMPUS_SCENE_ID,
         sceneVersion: 'lod3-fixed',
         metadata: {
@@ -224,15 +266,25 @@ async function start(resumeCapture = false): Promise<void> {
           source: 'simulation-point-cloud',
           cameraConvention: 'opengl-camera-to-world',
           frozenLod: 3,
+          quality_preset: qualityPreset.value,
+          captureResolution: captureSize.value,
           source_identity: stage.value.sourceIdentity(),
         },
       })
       captured.value = 0
       persist()
     }
-    const manifest = await serviceRequest<{ frames: Array<{ frameId: string }> }>(
-      `/api/v1/datasets/${datasetId.value}/manifest`,
+    const manifest = await serviceRequest<{
+      metadata?: { quality_preset?: string }
+      frames: Array<{ frameId: string; width: number; height: number }>
+    }>(`/api/v1/datasets/${datasetId.value}/manifest`)
+    if (
+      manifest.frames.some(
+        (frame) =>
+          frame.width !== captureSize.value.width || frame.height !== captureSize.value.height,
+      )
     )
+      throw new Error('继续采集需保持原分辨率，请切回原画质档位，或开始完整实验重新采集。')
     const existing = new Set(manifest.frames.map((frame) => frame.frameId))
     captured.value = existing.size
     for (let i = 0; i < plan.length; i++) {
@@ -243,7 +295,7 @@ async function start(resumeCapture = false): Promise<void> {
       const view = plan[i]!
       const frameId = `${datasetId.value}-${view.id}`
       if (existing.has(frameId)) continue
-      const shot = stage.value.capture(view)
+      const shot = stage.value.capture(view, captureSize.value.width, captureSize.value.height)
       await serviceRequest(`/api/v1/datasets/${datasetId.value}/frames`, {
         frameId,
         imageDataUrl: shot.dataUrl,
@@ -310,9 +362,12 @@ async function connect(): Promise<void> {
       datasetId.value = saved.datasetId
       if (saved.jobId) await loadJob(saved.jobId)
       else {
-        const manifest = await serviceRequest<{ frames: unknown[] }>(
-          `/api/v1/datasets/${saved.datasetId}/manifest`,
-        )
+        const manifest = await serviceRequest<{
+          metadata?: { quality_preset?: 'baseline' | 'detail' }
+          frames: unknown[]
+        }>(`/api/v1/datasets/${saved.datasetId}/manifest`)
+        qualityPreset.value = manifest.metadata?.quality_preset ?? 'baseline'
+        applyPreset()
         captured.value = manifest.frames.length
         message.value = '上次采集尚未提交训练，可继续采集或直接提交已有数据。'
       }
@@ -376,7 +431,8 @@ onBeforeUnmount(() => {
         </div>
         <CampusCaptureStage ref="stage" @ready="sceneReady = true" @error="error = $event" />
         <div class="capture-summary">
-          <span>32 个训练视角</span><span>8 个独立测试视角</span><span>256 × 192</span>
+          <span>32 个训练视角</span><span>8 个独立测试视角</span
+          ><span>{{ captureSize.width }} × {{ captureSize.height }} 采集</span>
         </div>
         <p class="note">
           使用固定点云精度与虚拟相机轨迹，测试视角在采集前独立划分。该轨迹用于成像实验，未校验无人机可飞性。
@@ -393,9 +449,29 @@ onBeforeUnmount(() => {
           {{ connecting ? '正在连接…' : '重新连接服务' }}
         </button>
         <label
+          >画质档位<select
+            v-model="qualityPreset"
+            :disabled="busy"
+            data-testid="experiment-preset"
+            @change="applyPreset"
+          >
+            <option value="detail">高清 · 512 × 384 / 4.8 万高斯</option>
+            <option value="baseline">快速基线 · 256 × 192 / 8 千高斯</option>
+          </select></label
+        >
+        <p class="note preset-note">
+          {{
+            qualityPreset === 'detail'
+              ? '提高真实采集分辨率与模型密度，增加前景训练。训练和渲染耗时更长。'
+              : '用于快速检查流程，建筑边缘与细节较粗。'
+          }}
+        </p>
+        <label
           >训练步数<select v-model.number="steps" :disabled="busy" data-testid="experiment-steps">
             <option :value="400">400 · 快速验证</option>
             <option :value="1200">1200 · 更充分训练</option>
+            <option :value="2400">2400 · 高清训练</option>
+            <option :value="4000">4000 · 延长训练</option>
           </select></label
         >
         <label
@@ -403,7 +479,7 @@ onBeforeUnmount(() => {
             v-model.number="gaussians"
             type="number"
             min="1000"
-            max="20000"
+            max="80000"
             step="1000"
             :disabled="busy"
         /></label>
@@ -521,6 +597,19 @@ onBeforeUnmount(() => {
         前景约占 {{ (report.quality.foreground_fraction * 100).toFixed(1) }}%，前景 PSNR
         排除纯背景区域；各项画质指标均取独立测试视角的平均值。
       </p>
+      <p v-if="report.previous_run_comparison" class="comparison-summary">
+        同分辨率复测原基线 → 本次结果：PSNR
+        {{ report.previous_run_comparison.baseline_quality.psnr.toFixed(2) }} →
+        {{ report.quality.psnr.toFixed(2) }} dB；前景 PSNR
+        {{ report.previous_run_comparison.baseline_quality.foreground_psnr?.toFixed(2) ?? '—' }} →
+        {{ report.quality.foreground_psnr?.toFixed(2) ?? '—' }} dB。 使用相同测试相机、{{
+          report.width
+        }}
+        × {{ report.height }} 输出与参考图。
+        <a :href="artifact(report.previous_run_comparison.image)" target="_blank" rel="noreferrer"
+          >打开前后对比图 ↗</a
+        >
+      </p>
       <label class="view-picker"
         >测试视角<select v-model.number="selectedView">
           <option v-for="(view, index) in report.views" :key="view.frame_id" :value="index">
@@ -528,21 +617,102 @@ onBeforeUnmount(() => {
           </option>
         </select></label
       >
+      <label v-if="previousView" class="comparison-toggle"
+        ><input v-model="comparePrevious" type="checkbox" />将左图切换为原基线，比较细节</label
+      >
       <div v-if="currentView" class="comparison-grid">
         <figure>
-          <img :src="artifact(currentView.reference_image)" alt="独立视角参考图" />
-          <figcaption>独立视角参考图</figcaption>
+          <a
+            v-if="comparePrevious && previousView"
+            :href="artifact(previousView.baseline_image)"
+            target="_blank"
+            rel="noreferrer"
+            ><img :src="artifact(previousView.baseline_image)" alt="原基线在相同分辨率的渲染"
+          /></a>
+          <button
+            v-else
+            class="image-button"
+            aria-label="放大参考图"
+            @click="enlargeImage('reference_image')"
+          >
+            <img :src="artifact(currentView.reference_image)" alt="独立视角参考图" />
+          </button>
+          <figcaption>
+            {{ comparePrevious && previousView ? '原快速基线 · 同分辨率复渲染' : '独立视角参考图' }}
+          </figcaption>
         </figure>
         <figure>
-          <img :src="artifact(currentView.prediction_image)" alt="训练后的高斯渲染" />
+          <button
+            class="image-button"
+            aria-label="放大高斯渲染"
+            @click="enlargeImage('prediction_image')"
+          >
+            <img :src="artifact(currentView.prediction_image)" alt="训练后的高斯渲染" />
+          </button>
           <figcaption>训练后的高斯渲染</figcaption>
         </figure>
         <figure>
-          <img :src="artifact(currentView.difference_image)" alt="绝对误差放大三倍" />
+          <button
+            class="image-button"
+            aria-label="放大误差图"
+            @click="enlargeImage('difference_image')"
+          >
+            <img :src="artifact(currentView.difference_image)" alt="绝对误差放大三倍" />
+          </button>
           <figcaption>绝对误差 × 3</figcaption>
         </figure>
       </div>
+      <p class="result-context">
+        点击图像可查看原始像素。原始点云含合成立面，缺少照片纹理；提升分辨率仍无法补出缺失的真实细节。
+      </p>
     </section>
+    <dialog
+      ref="imageDialog"
+      class="image-dialog"
+      aria-label="测试图原始像素"
+      @click="$event.target === imageDialog && imageDialog?.close()"
+    >
+      <div class="section-head">
+        <h2>测试图 · {{ report?.width }} × {{ report?.height }} 原始像素</h2>
+        <button @click="imageDialog?.close()">关闭</button>
+      </div>
+      <div class="image-tabs">
+        <button
+          :aria-pressed="enlargedImage === 'reference_image'"
+          @click="enlargedImage = 'reference_image'"
+        >
+          参考图
+        </button>
+        <button
+          :aria-pressed="enlargedImage === 'prediction_image'"
+          @click="enlargedImage = 'prediction_image'"
+        >
+          高斯渲染
+        </button>
+        <button
+          :aria-pressed="enlargedImage === 'difference_image'"
+          @click="enlargedImage = 'difference_image'"
+        >
+          误差图
+        </button>
+      </div>
+      <div class="original-image">
+        <img
+          v-if="currentView"
+          :src="artifact(currentView[enlargedImage])"
+          alt="当前测试图原始像素"
+          :width="report?.width"
+          :height="report?.height"
+        />
+      </div>
+      <a
+        v-if="currentView"
+        :href="artifact(currentView[enlargedImage])"
+        target="_blank"
+        rel="noreferrer"
+        >单独打开原图 ↗</a
+      >
+    </dialog>
   </main>
 </template>
 
@@ -674,6 +844,75 @@ h2 {
   font-size: 12px;
   line-height: 1.8;
   color: #859ba5;
+}
+.preset-note {
+  margin: -4px 0 18px;
+}
+.comparison-summary {
+  padding: 12px 14px;
+  border: 1px solid #31564e;
+  border-radius: 8px;
+  background: #102c29;
+  color: #b4d8cf;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.comparison-summary a {
+  margin-left: 8px;
+}
+.comparison-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #afc2c7;
+  font-size: 12px;
+  margin: 0 0 16px;
+}
+.comparison-toggle input {
+  width: auto;
+  margin: 0;
+  accent-color: #75cbb7;
+}
+.image-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.image-dialog {
+  max-width: calc(100vw - 32px);
+  width: max-content;
+  max-height: calc(100dvh - 32px);
+  border: 1px solid #3b5c65;
+  border-radius: 14px;
+  background: #0d1b23;
+  color: #dce7e7;
+  padding: 22px;
+}
+.image-dialog::backdrop {
+  background: #000b;
+}
+.image-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.image-tabs [aria-pressed='true'] {
+  color: #b8eedf;
+  border-color: #75cbb7;
+}
+.original-image {
+  max-width: calc(100vw - 80px);
+  max-height: calc(100dvh - 230px);
+  overflow: auto;
+  margin-bottom: 16px;
+  background: #0a141b;
+}
+.original-image img {
+  display: block;
+  max-width: none;
 }
 .settings-card > label {
   display: block;

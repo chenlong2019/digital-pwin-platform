@@ -96,6 +96,29 @@ test('指定实验链接恢复结果，报告读取失败后自动重试，切�
   expect(errors).toEqual([])
 })
 
+test('高清为新实验默认档位，旧实验保持原设置；测试图按原始尺寸查看并支持关闭', async ({ page }) => {
+  await mockService(page)
+  await page.goto('/experiments')
+  await expect(page.getByTestId('experiment-preset')).toHaveValue('detail')
+  await expect(page.getByTestId('experiment-steps')).toHaveValue('2400')
+  await expect(page.locator('input[type="number"]')).toHaveValue('48000')
+  await page.getByTestId('experiment-preset').selectOption('baseline')
+  await expect(page.getByTestId('experiment-steps')).toHaveValue('400')
+  await page.goto(`/experiments?job=${jobId}`)
+  await expect(page.getByTestId('experiment-report')).toBeVisible()
+  await expect(page.getByTestId('experiment-preset')).toHaveValue('baseline')
+  await page.getByRole('button', { name: '放大高斯渲染', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '测试图原始像素' })
+  await expect(dialog).toBeVisible()
+  const original = dialog.getByAltText('当前测试图原始像素')
+  await expect(original).toHaveAttribute('width', '256')
+  await expect(original).toHaveAttribute('src', /test-0-prediction\.png$/)
+  await dialog.getByRole('button', { name: '参考图', exact: true }).click()
+  await expect(original).toHaveAttribute('src', /test-0-reference\.png$/)
+  await page.keyboard.press('Escape')
+  await expect(dialog).not.toBeVisible()
+})
+
 test('离线时可重新连接，窄屏可以查看完整结果', async ({ page }) => {
   let online = false
   await page.setViewportSize({ width: 390, height: 844 })

@@ -32,7 +32,7 @@ export class PointCloudCaptureRenderer {
     this.camera = new THREE.PerspectiveCamera(58, width / height, 0.1, 2000)
     this.renderer = new THREE.WebGLRenderer({ antialias: true })
     this.renderer.setPixelRatio(1)
-    this.renderer.setSize(width, height)
+    this.renderer.setSize(1024, 768)
     this.renderer.domElement.style.width = '100%'
     this.renderer.domElement.style.height = '100%'
     container.appendChild(this.renderer.domElement)
@@ -56,16 +56,32 @@ export class PointCloudCaptureRenderer {
     return this.cloud.sourceIdentity()
   }
 
-  capture(view: MultiViewCamera): MultiViewPhoto {
+  preview(view: MultiViewCamera): void {
     if (this.disposed || this.cloud.snapshot().state !== 'ready')
       throw new Error('采集场景尚未就绪')
     this.camera.position.set(view.position.x, view.position.y, view.position.z)
     this.camera.lookAt(view.target.x, view.target.y, view.target.z)
     this.camera.updateMatrixWorld(true)
     this.renderer.render(this.scene, this.camera)
+  }
+
+  capture(view: MultiViewCamera, width = this.width, height = this.height): MultiViewPhoto {
+    if (
+      !Number.isInteger(width) ||
+      !Number.isInteger(height) ||
+      width < 64 ||
+      height < 64 ||
+      width > 512 ||
+      height > 512
+    )
+      throw new Error('采集分辨率需在 64–512 像素之间')
+    this.camera.aspect = width / height
+    this.camera.updateProjectionMatrix()
+    this.renderer.setSize(width, height, false)
+    this.preview(view)
     const q = this.camera.quaternion
     const projection = this.camera.projectionMatrix.elements
-    return {
+    const photo: MultiViewPhoto = {
       dataUrl: this.renderer.domElement.toDataURL('image/png'),
       pose: {
         positionM: { ...view.position },
@@ -73,15 +89,21 @@ export class PointCloudCaptureRenderer {
         coordinateFrame: 'platform-world',
       },
       intrinsics: {
-        width: this.width,
-        height: this.height,
-        fx: (projection[0]! * this.width) / 2,
-        fy: (projection[5]! * this.height) / 2,
-        cx: this.width / 2,
-        cy: this.height / 2,
+        width,
+        height,
+        fx: (projection[0]! * width) / 2,
+        fy: (projection[5]! * height) / 2,
+        cx: width / 2,
+        cy: height / 2,
         distortion: [],
       },
     }
+    // Preview has its own drawing resolution; never enlarge the training PNG.
+    this.renderer.setSize(1024, 768, false)
+    this.camera.aspect = 4 / 3
+    this.camera.updateProjectionMatrix()
+    this.preview(view)
+    return photo
   }
 
   dispose(): void {
