@@ -6,6 +6,12 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
+      path: '/console',
+      name: 'console',
+      component: () => import('../views/ConsoleView.vue'),
+      meta: { title: '控制台' },
+    },
+    {
       path: '/capture-tasks',
       name: 'capture-tasks',
       component: () => import('../views/CaptureTasksView.vue'),

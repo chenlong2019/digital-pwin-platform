@@ -128,7 +128,7 @@ describe('README 快速开始', () => {
   it('内容确实进了文档页正文,而不是只躺在 README 里', () => {
     expect(SPEC_PRELUDE.html).toContain('快速开始')
     expect(SPEC_PRELUDE.html).toContain('npm ci')
-    expect(SPEC_PRELUDE.html).toContain('http://localhost:5173')
+    expect(SPEC_PRELUDE.html).toContain('http://localhost:45678')
   })
 })
 

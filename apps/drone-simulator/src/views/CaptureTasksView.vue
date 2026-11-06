@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 import { CAPTURE_SERVICE_URL, captureRequest } from '../capture/api'
 import type { CaptureManifest, CaptureShotPlan, CaptureTask } from '../capture/api'
 
@@ -11,6 +11,8 @@ const shots = ref<CaptureShotPlan[]>([
   { id: 'view-03', positionEnu: [4, 0, 6], heading: 340, pitch: -25 },
 ])
 const tasks = ref<CaptureTask[]>([])
+const route = useRoute()
+const resultPanel = ref<HTMLElement | null>(null)
 const selectedId = ref<string | null>(null)
 const selected = computed(() => tasks.value.find((task) => task.task_id === selectedId.value) ?? null)
 const frames = ref<CaptureManifest['frames']>([])
@@ -37,7 +39,10 @@ async function refresh(): Promise<void> {
     const previousStatus = selected.value?.status
     tasks.value = next
     connected.value = true
-    if (!selectedId.value && next.length) selectedId.value = next[0]!.task_id
+    if (!selectedId.value && next.length) {
+      const requested = typeof route.query.task === 'string' ? next.find((task) => task.task_id === route.query.task) : null
+      selectedId.value = requested?.task_id ?? next[0]!.task_id
+    }
     const current = selected.value
     if (previousStatus && current?.status !== previousStatus) note.value = ''
     const currentId = current?.task_id
@@ -82,7 +87,13 @@ function selectTask(task: CaptureTask): void {
   selectedId.value = task.task_id; frames.value = []
   void refresh()
 }
-onMounted(() => { void refresh(); timer = setInterval(() => void refresh(), 2000) })
+onMounted(() => {
+  void refresh().then(async () => {
+    await nextTick()
+    if (!disposed && selectedId.value === route.query.task) resultPanel.value?.scrollIntoView({ block: 'start' })
+  })
+  timer = setInterval(() => void refresh(), 2000)
+})
 onScopeDispose(() => { disposed = true; clearInterval(timer) })
 </script>
 
@@ -90,7 +101,7 @@ onScopeDispose(() => { disposed = true; clearInterval(timer) })
   <div class="capture-page">
     <header class="capture-header">
       <div><h1>采集任务</h1><p>下发拍摄计划，查看执行进度和采集成果。</p></div>
-      <div class="header-actions"><span :class="connected ? 'online' : 'offline'">{{ connected ? '采集服务已连接' : '采集服务未连接' }}</span><RouterLink to="/">返回沙盒</RouterLink></div>
+      <div class="header-actions"><span :class="connected ? 'online' : 'offline'">{{ connected ? '采集服务已连接' : '采集服务未连接' }}</span><RouterLink to="/console">控制台</RouterLink><RouterLink to="/">返回沙盒</RouterLink></div>
     </header>
     <p v-if="!connected" class="notice" role="status">请启动采集服务和采集执行端，任务会在连接后继续。</p>
     <p v-if="note" class="notice" role="status">{{ note }}</p>
@@ -123,7 +134,7 @@ onScopeDispose(() => { disposed = true; clearInterval(timer) })
           <span>{{ task.uploaded }} / {{ task.total }}</span>
         </button>
       </section>
-      <section v-if="selected" class="panel result-panel" data-testid="capture-task-detail">
+      <section v-if="selected" ref="resultPanel" class="panel result-panel" data-testid="capture-task-detail">
         <div class="result-header"><h2>{{ selected.name }}</h2><span>{{ labels[selected.status] }}</span></div>
         <p>已采集 {{ selected.completed }} / {{ selected.total }} 张，已登记 {{ selected.uploaded }} 张。</p>
         <progress :value="selected.uploaded" :max="selected.total" aria-label="采集进度" />
