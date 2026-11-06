@@ -87,6 +87,12 @@ apps/
 
 ---
 
+# 采集 Agent 平台闭环
+
+平台的 `/capture-tasks` 页面支持下发城市仿真采集计划、查看进度、暂停和恢复任务，以及查看已登记的照片。
+`drone-camera` 中的执行端主动领取任务，逐张上传图片与实测相机参数；任务和影像均持久化，完成校验后封存数据集。
+启动方法、恢复语义和真实浏览器联调见 [采集 Agent 接入说明](docs/architecture/capture-agent-integration.md)。
+
 # 实现状态
 
 规范是终态，代码在推进 —— 这一节只记录**当前仓库里真的存在什么**，
@@ -94,12 +100,12 @@ apps/
 （`src/__tests__/docs.spec.ts`）与架构守卫的包清单互相钉住：这里写「已落地」
 而目录不存在、或写「未实现」而目录已经出现，测试都会红。
 
-## 已落地（17 个包 + 1 个应用）
+## 已落地（18 个包 + 1 个应用）
 
 | 层 | 模块 |
 | --- | --- |
 | Core | `contracts` `simulation-core` `agent-core` `sandbox-core` `evaluation-core` |
-| Capability | `task-core` `recorder` `result` `replay` `input` `grid-inspection` `power-evaluation` |
+| Capability | `task-core` `recorder` `result` `replay` `input` `camera-capture` `grid-inspection` `power-evaluation` |
 | Domain | `drone-agent` `vehicle-agent` `power-domain` |
 | API | `domain-api` |
 | Adapter | `three-adapter` |

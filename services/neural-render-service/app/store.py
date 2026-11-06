@@ -3,13 +3,23 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-import mimetypes
+import hashlib
+import io
+import os
 import re
 import sqlite3
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+from PIL import Image
 
 from .models import Dataset, DatasetCreate, DatasetFrameUpload, Job, Scene, SceneCreate
+
+
+class DatasetConflict(ValueError):
+    pass
 
 
 class PersistentStore:
@@ -39,7 +49,28 @@ class PersistentStore:
             return psycopg.connect(self.database_url)
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    @contextmanager
+    def transaction(self):
+        """Serialize local writes; PostgreSQL callers also lock the affected row."""
+        with closing(self._connect()) as connection:
+            try:
+                if self.backend == "sqlite":
+                    connection.execute("BEGIN IMMEDIATE")
+                yield connection
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+    def lock_dataset(self, connection, dataset_id: str):
+        lock = " FOR UPDATE" if self.backend == "postgres" else ""
+        row = connection.execute(
+            f"SELECT payload FROM datasets WHERE dataset_id = {self._placeholder()}{lock}", (dataset_id,)
+        ).fetchone()
+        return Dataset.model_validate(self._json_load(row[0])) if row else None
 
     def _placeholder(self) -> str:
         return "%s" if self.backend == "postgres" else "?"
@@ -117,33 +148,44 @@ class PersistentStore:
             connection.commit()
         return dataset
 
-    def get_dataset(self, dataset_id: str) -> Dataset | None:
+    def get_dataset(self, dataset_id: str, connection=None) -> Dataset | None:
         placeholder = self._placeholder()
-        with self._connect() as connection:
-            row = connection.execute(f"SELECT payload FROM datasets WHERE dataset_id = {placeholder}", (dataset_id,)).fetchone()
+        with nullcontext(connection) if connection is not None else closing(self._connect()) as conn:
+            row = conn.execute(f"SELECT payload FROM datasets WHERE dataset_id = {placeholder}", (dataset_id,)).fetchone()
         return Dataset.model_validate(self._json_load(row[0])) if row else None
 
-    def _frame_payloads(self, dataset_id: str) -> list[dict[str, Any]]:
+    def list_datasets(self) -> list[Dataset]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute("SELECT payload FROM datasets ORDER BY created_at DESC").fetchall()
+        return [Dataset.model_validate(self._json_load(row[0])) for row in rows]
+
+    def _frame_payloads(self, dataset_id: str, connection=None) -> list[dict[str, Any]]:
         placeholder = self._placeholder()
-        with self._connect() as connection:
-            rows = connection.execute(
+        with nullcontext(connection) if connection is not None else closing(self._connect()) as conn:
+            rows = conn.execute(
                 f"SELECT payload FROM dataset_frames WHERE dataset_id = {placeholder} ORDER BY created_at, frame_id",
                 (dataset_id,),
             ).fetchall()
         return [self._json_load(row[0]) for row in rows]
 
-    def validate_dataset(self, dataset_id: str) -> dict[str, Any] | None:
-        dataset = self.get_dataset(dataset_id)
+    def validate_dataset(self, dataset_id: str, connection=None) -> dict[str, Any] | None:
+        dataset = self.get_dataset(dataset_id, connection)
         if not dataset:
             return None
-        frames = self._frame_payloads(dataset_id)
+        frames = self._frame_payloads(dataset_id, connection)
+        capture_task = dataset.metadata.get("captureTaskId")
+        if capture_task:
+            frames.sort(key=lambda frame: frame["metadata"]["shotIndex"])
         issues: list[dict[str, Any]] = []
         if not frames:
             issues.append({"code": "NO_FRAMES", "severity": "error", "message": "数据集没有采集帧"})
         elif len(frames) < 10:
             issues.append({"code": "FEW_FRAMES", "severity": "warning", "message": "少于 10 帧，可能不足以支持稳定重建"})
 
-        previous_time: float | None = None
+        expected = dataset.metadata.get("expectedFrameCount")
+        if expected is not None and len(frames) != expected:
+            issues.append({"code": "INCOMPLETE_PLAN", "severity": "error", "message": "尚有计划拍点未上传"})
+        previous_times: dict[str, float] = {}
         reference_intrinsics: dict[str, Any] | None = None
         for frame in frames:
             frame_id = frame.get("frameId")
@@ -151,13 +193,23 @@ class PersistentStore:
             image_path = self.storage_root / image_uri
             if not image_path.is_file():
                 issues.append({"code": "IMAGE_MISSING", "severity": "error", "message": "图片文件不存在", "frame_id": frame_id})
+            else:
+                try:
+                    content = image_path.read_bytes()
+                    self._check_image(content, frame["imageMimeType"], frame["width"], frame["height"])
+                    if frame.get("contentHash") and hashlib.sha256(content).hexdigest() != frame["contentHash"]:
+                        raise ValueError("image content hash mismatch")
+                except (ValueError, OSError) as exc:
+                    issues.append({"code": "IMAGE_INVALID", "severity": "error", "message": str(exc), "frame_id": frame_id})
             simulation_time = frame.get("simulationTime")
+            session = frame.get("metadata", {}).get("simulationSessionId", "default") if capture_task else "default"
+            previous_time = previous_times.get(session)
             if not isinstance(simulation_time, (int, float)):
                 issues.append({"code": "TIME_MISSING", "severity": "error", "message": "缺少仿真时间", "frame_id": frame_id})
             elif previous_time is not None and simulation_time <= previous_time:
                 issues.append({"code": "TIME_NOT_MONOTONIC", "severity": "error", "message": "仿真时间没有递增", "frame_id": frame_id})
             else:
-                previous_time = simulation_time
+                previous_times[session] = simulation_time
             pose = frame.get("cameraPose")
             if not pose or pose.get("coordinateFrame") != "platform-world":
                 issues.append({"code": "POSE_INVALID", "severity": "error", "message": "相机位姿缺失或坐标系不正确", "frame_id": frame_id})
@@ -174,19 +226,35 @@ class PersistentStore:
         errors = [issue for issue in issues if issue["severity"] == "error"]
         return {"dataset_id": dataset_id, "valid": not errors, "frame_count": len(frames), "issues": issues}
 
-    def set_dataset_status(self, dataset_id: str, status: str) -> Dataset | None:
-        dataset = self.get_dataset(dataset_id)
+    def set_dataset_status(self, dataset_id: str, status: str, connection=None) -> Dataset | None:
+        dataset = self.get_dataset(dataset_id, connection)
         if not dataset:
             return None
         updated = dataset.model_copy(update={"status": status})
         placeholder = self._placeholder()
-        with self._connect() as connection:
-            connection.execute(
-                f"UPDATE datasets SET payload = {placeholder} WHERE dataset_id = {placeholder}",
-                (self._json_dump(updated.model_dump(mode="json")), dataset_id),
-            )
-            connection.commit()
+        if connection is None:
+            with self.transaction() as conn:
+                self.lock_dataset(conn, dataset_id)
+                return self.set_dataset_status(dataset_id, status, conn)
+        connection.execute(
+            f"UPDATE datasets SET payload = {placeholder} WHERE dataset_id = {placeholder}",
+            (self._json_dump(updated.model_dump(mode="json")), dataset_id),
+        )
         return updated
+
+    def finalize_dataset(self, dataset_id: str, connection=None):
+        if connection is None:
+            with self.transaction() as conn:
+                return self.finalize_dataset(dataset_id, conn)
+        dataset = self.lock_dataset(connection, dataset_id)
+        if dataset is None:
+            raise KeyError("dataset not found")
+        validation = self.validate_dataset(dataset_id, connection)
+        if not validation["valid"]:
+            raise DatasetConflict(self._json_dump(validation))
+        if dataset.status not in ("draft", "ready"):
+            raise DatasetConflict("dataset is already in use")
+        return {"dataset": self.set_dataset_status(dataset_id, "ready", connection), "validation": validation}
 
     def create_job(self, job: Job) -> Job:
         payload = self._json_dump(job.model_dump(mode="json"))
@@ -205,14 +273,24 @@ class PersistentStore:
             row = connection.execute(f"SELECT payload FROM jobs WHERE job_id = {placeholder}", (job_id,)).fetchone()
         return Job.model_validate(self._json_load(row[0])) if row else None
 
-    def add_frame(self, dataset_id: str, request: DatasetFrameUpload) -> dict[str, Any]:
-        if not self.get_dataset(dataset_id):
+    def add_frame(self, dataset_id: str, request: DatasetFrameUpload, connection=None) -> dict[str, Any]:
+        if connection is None:
+            with self.transaction() as conn:
+                return self.add_frame(dataset_id, request, conn)
+        dataset = self.lock_dataset(connection, dataset_id)
+        if dataset is None:
             raise KeyError("dataset not found")
-        image_uri = self._save_image(dataset_id, request.frame_id, request.image_data_url)
+        mime = self._mime_from_data_url(request.image_data_url)
+        content = self._decode_image(request.image_data_url)
+        self._check_image(content, mime, request.width, request.height)
+        content_hash = hashlib.sha256(content).hexdigest()
+        extension = ".png" if mime == "image/png" else ".jpg"
+        image_uri = (Path("datasets") / dataset_id / "images" / f"{request.frame_id}-{content_hash[:16]}{extension}").as_posix()
         frame_payload = {
             "frameId": request.frame_id,
             "imageUri": image_uri,
-            "imageMimeType": self._mime_from_data_url(request.image_data_url),
+            "imageMimeType": mime,
+            "contentHash": content_hash,
             "width": request.width,
             "height": request.height,
             "simulationTime": request.simulation_time,
@@ -223,25 +301,33 @@ class PersistentStore:
         }
         payload = self._json_dump(frame_payload)
         placeholder = self._placeholder()
-        with self._connect() as connection:
-            try:
-                connection.execute(
-                    f"INSERT INTO dataset_frames(frame_id, dataset_id, image_uri, payload, created_at) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
-                    (request.frame_id, dataset_id, image_uri, payload, request.captured_at.isoformat()),
-                )
-                connection.commit()
-            except Exception as exc:
-                if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
-                    raise ValueError(f"frame already exists: {request.frame_id}") from exc
-                raise
+        row = connection.execute(f"SELECT dataset_id, payload FROM dataset_frames WHERE frame_id = {placeholder}", (request.frame_id,)).fetchone()
+        if row:
+            previous = self._json_load(row[1])
+            comparable = lambda frame: {key: value for key, value in frame.items() if key not in ("imageUri", "contentHash")}
+            previous_path = self.storage_root / previous["imageUri"]
+            previous_hash = previous.get("contentHash") or (hashlib.sha256(previous_path.read_bytes()).hexdigest() if previous_path.is_file() else None)
+            if row[0] != dataset_id or comparable(previous) != comparable(frame_payload) or previous_hash != content_hash:
+                raise DatasetConflict(f"frame ID already contains different data: {request.frame_id}")
+            # Repeating a committed upload after a lost response is safe, including after finalize.
+            self._write_image(previous_path, content)
+            return {"frameId": request.frame_id, "imageUri": previous["imageUri"]}
+        if dataset.status != "draft":
+            raise DatasetConflict("dataset is sealed; new frames are not accepted")
+        self._write_image(self.storage_root / image_uri, content)
+        connection.execute(
+            f"INSERT INTO dataset_frames(frame_id, dataset_id, image_uri, payload, created_at) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
+            (request.frame_id, dataset_id, image_uri, payload, request.captured_at.isoformat()),
+        )
         return {"frameId": request.frame_id, "imageUri": image_uri}
 
     def get_manifest(self, dataset_id: str) -> dict[str, Any] | None:
         dataset = self.get_dataset(dataset_id)
         if not dataset:
             return None
-        placeholder = self._placeholder()
         frames = self._frame_payloads(dataset_id)
+        if dataset.metadata.get("captureTaskId"):
+            frames.sort(key=lambda frame: frame["metadata"]["shotIndex"])
         first = frames[0] if frames else None
         return {
             "format": "simulation-platform/neural-dataset",
@@ -257,22 +343,49 @@ class PersistentStore:
             "metadata": dataset.metadata,
         }
 
-    def _save_image(self, dataset_id: str, frame_id: str, data_url: str) -> str:
+    @staticmethod
+    def _decode_image(data_url: str) -> bytes:
         match = re.fullmatch(r"data:([^;,]+);base64,(.+)", data_url, re.DOTALL)
         if not match:
             raise ValueError("imageDataUrl must be a base64 data URL")
-        mime, encoded = match.groups()
+        _, encoded = match.groups()
+        if len(encoded) > 44 * 1024 * 1024:
+            raise ValueError("image exceeds the 32 MiB upload limit")
         try:
             content = base64.b64decode(encoded, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise ValueError("imageDataUrl contains invalid base64") from exc
-        extension = mimetypes.guess_extension(mime) or ".bin"
-        safe_frame_id = re.sub(r"[^a-zA-Z0-9._-]", "_", frame_id)
-        relative = Path("datasets") / dataset_id / "images" / f"{safe_frame_id}{extension}"
-        target = self.storage_root / relative
+        return content
+
+    @staticmethod
+    def _check_image(content: bytes, mime: str, width: int, height: int):
+        if mime not in ("image/png", "image/jpeg"):
+            raise ValueError("only PNG and JPEG images are accepted")
+        try:
+            with Image.open(io.BytesIO(content)) as image:
+                expected = "PNG" if mime == "image/png" else "JPEG"
+                if image.format != expected or image.size != (width, height):
+                    raise ValueError("decoded image dimensions or format disagree with metadata")
+                image.verify()
+            with Image.open(io.BytesIO(content)) as image:
+                image.load()
+        except (OSError, SyntaxError) as exc:
+            raise ValueError("image cannot be fully decoded") from exc
+
+    @staticmethod
+    def _write_image(target: Path, content: bytes):
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        return relative.as_posix()
+        if target.is_file() and target.read_bytes() == content:
+            return
+        temporary = target.with_name(f"{target.name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _mime_from_data_url(data_url: str) -> str:

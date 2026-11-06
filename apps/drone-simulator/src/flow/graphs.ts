@@ -54,7 +54,7 @@ const packages: FlowGraph = {
   id: 'packages',
   title: '包依赖明细',
   caption:
-    '十七个已实现包的真实依赖边(取自架构守卫的白名单)。读法:从左往右是「依赖谁」,所以这一列一列正好是 README 的六层。contracts 被所有包直接依赖(§44),为避免连线淹没图,只画了主干那几条。',
+    '十九个已实现模块的真实依赖边(取自架构守卫的白名单)。读法:从左往右是「依赖谁」,所以这一列一列正好是 README 的六层。contracts 被所有包直接依赖(§44),为避免连线淹没图,只画了主干那几条。',
   refs: '§42 Package 静态依赖规则 · §43 Package 依赖矩阵 · §74 架构静态检查',
   direction: 'LR',
   edgeType: 'default',
@@ -63,6 +63,7 @@ const packages: FlowGraph = {
     { id: 'app', x: 0, y: 280, w: 176, label: 'drone-simulator', sublabel: 'Application · 唯一 UI 宿主', ref: '§27', tone: 'accent' },
     { id: 'api', x: 200, y: 280, w: 176, label: 'domain-api', sublabel: 'API · Session / Command / Task', ref: '§24' },
     { id: 'three', x: 200, y: 520, w: 176, label: 'three-adapter', sublabel: 'Adapter · 只依赖 contracts', ref: '§64' },
+    { id: 'capture', x: 200, y: 650, w: 176, label: 'camera-capture', sublabel: 'Capability · 图片与相机参数登记', ref: '§32' },
     { id: 'drone', x: 400, y: 20, w: 176, label: 'drone-agent', sublabel: 'Domain · 无人机能力', ref: '§31' },
     { id: 'vehicle', x: 400, y: 860, w: 176, label: 'vehicle-agent', sublabel: 'Domain · 轮式载具', ref: '§31' },
     { id: 'task', x: 400, y: 140, w: 176, label: 'task-core', sublabel: 'Capability · 领域无关', ref: '§10' },
@@ -82,6 +83,8 @@ const packages: FlowGraph = {
   edges: [
     { from: 'app', to: 'api' },
     { from: 'app', to: 'three' },
+    { from: 'app', to: 'capture', label: 'CaptureService' },
+    { from: 'capture', to: 'contracts' },
     { from: 'app', to: 'input', label: 'InputIntent' },
     { from: 'app', to: 'result', label: 'TaskResult' },
     { from: 'app', to: 'replay', label: 'ReplaySnapshot' },

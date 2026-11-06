@@ -6,6 +6,12 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
+      path: '/capture-tasks',
+      name: 'capture-tasks',
+      component: () => import('../views/CaptureTasksView.vue'),
+      meta: { title: '采集任务' },
+    },
+    {
       path: '/',
       name: 'sandbox',
       component: SandboxView,

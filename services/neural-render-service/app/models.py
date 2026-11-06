@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+SAFE_ID = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
 
 
 def utc_now() -> datetime:
@@ -12,7 +14,7 @@ def utc_now() -> datetime:
 
 
 class Vec3(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     x: float
     y: float
@@ -20,12 +22,18 @@ class Vec3(BaseModel):
 
 
 class Quaternion(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     x: float
     y: float
     z: float
     w: float
+
+    @model_validator(mode="after")
+    def unit_length(self):
+        if abs(sum(v * v for v in (self.x, self.y, self.z, self.w)) - 1) > 1e-3:
+            raise ValueError("camera quaternion must have unit length")
+        return self
 
 
 class CameraIntrinsics(BaseModel):
@@ -49,9 +57,9 @@ class CameraPose(BaseModel):
 
 
 class SceneCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    scene_id: str = Field(min_length=1, max_length=160, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    scene_id: str = Field(validation_alias="sceneId", min_length=1, max_length=160, pattern=SAFE_ID)
     name: str = Field(min_length=1, max_length=200)
     coordinate_frame: str = "platform-world"
     asset_uri: str | None = None
@@ -65,12 +73,12 @@ class Scene(SceneCreate):
 
 
 class DatasetCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    dataset_id: str = Field(default_factory=lambda: f"dataset-{uuid4().hex[:12]}")
+    dataset_id: str = Field(validation_alias="datasetId", default_factory=lambda: f"dataset-{uuid4().hex[:12]}", min_length=1, max_length=160, pattern=SAFE_ID)
     name: str = Field(min_length=1, max_length=200)
-    scene_id: str | None = None
-    scene_version: str | None = None
+    scene_id: str | None = Field(default=None, validation_alias="sceneId")
+    scene_version: str | None = Field(default=None, validation_alias="sceneVersion")
     image_uri: str | None = None
     pose_uri: str | None = None
     calibration_uri: str | None = None
@@ -112,7 +120,7 @@ class DatasetFramePose(BaseModel):
 
 
 class DatasetFrameIntrinsics(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, allow_inf_nan=False)
 
     width: int = Field(gt=0, le=8192)
     height: int = Field(gt=0, le=8192)
@@ -122,11 +130,17 @@ class DatasetFrameIntrinsics(BaseModel):
     cy: float = Field(ge=0)
     distortion: list[float] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def principal_point(self):
+        if self.cx > self.width or self.cy > self.height:
+            raise ValueError("principal point must lie inside the image")
+        return self
+
 
 class DatasetFrameUpload(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, allow_inf_nan=False)
 
-    frame_id: str = Field(alias="frameId", min_length=1, max_length=160)
+    frame_id: str = Field(alias="frameId", min_length=1, max_length=160, pattern=SAFE_ID)
     image_data_url: str = Field(alias="imageDataUrl", min_length=32)
     width: int = Field(gt=0, le=8192)
     height: int = Field(gt=0, le=8192)
@@ -135,6 +149,12 @@ class DatasetFrameUpload(BaseModel):
     camera_pose: DatasetFramePose = Field(alias="cameraPose")
     camera_intrinsics: DatasetFrameIntrinsics = Field(alias="cameraIntrinsics")
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def matching_dimensions(self):
+        if (self.width, self.height) != (self.camera_intrinsics.width, self.camera_intrinsics.height):
+            raise ValueError("frame and camera dimensions disagree")
+        return self
 
 
 class TrainRequest(BaseModel):

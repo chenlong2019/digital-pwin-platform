@@ -2,7 +2,7 @@ from app.models import DatasetCreate, DatasetFrameUpload, SceneCreate
 from app.store import PersistentStore
 
 
-def test_sqlite_store_persists_dataset_frames(tmp_path) -> None:
+def test_sqlite_store_persists_dataset_frames(tmp_path, png_url) -> None:
     store = PersistentStore(str(tmp_path))
     store.create_scene(SceneCreate(scene_id="scene-1", name="Scene 1"))
     store.create_dataset(DatasetCreate(dataset_id="dataset-1", name="Dataset 1", scene_id="scene-1"))
@@ -11,7 +11,7 @@ def test_sqlite_store_persists_dataset_frames(tmp_path) -> None:
         "dataset-1",
         DatasetFrameUpload(
             frameId="frame-1",
-            imageDataUrl="data:image/png;base64,iVBORw0KGgo=",
+            imageDataUrl=png_url(1280, 720),
             width=1280,
             height=720,
             simulationTime=1.25,
@@ -32,13 +32,13 @@ def test_sqlite_store_persists_dataset_frames(tmp_path) -> None:
     )
 
     manifest = store.get_manifest("dataset-1")
-    assert result["imageUri"].endswith("frame-1.png")
+    assert "/images/frame-1-" in result["imageUri"] and result["imageUri"].endswith(".png")
     assert manifest is not None
     assert manifest["coordinateFrame"] == "platform-world"
     assert len(manifest["frames"]) == 1
 
 
-def test_dataset_validation_survives_store_restart(tmp_path) -> None:
+def test_dataset_validation_survives_store_restart(tmp_path, png_url) -> None:
     first = PersistentStore(str(tmp_path))
     first.create_scene(SceneCreate(scene_id="scene-2", name="Scene 2"))
     first.create_dataset(DatasetCreate(dataset_id="dataset-2", name="Dataset 2", scene_id="scene-2"))
@@ -47,7 +47,7 @@ def test_dataset_validation_survives_store_restart(tmp_path) -> None:
             "dataset-2",
             DatasetFrameUpload(
                 frameId=f"frame-{index}",
-                imageDataUrl="data:image/png;base64,iVBORw0KGgo=",
+                imageDataUrl=png_url(1280, 720, index),
                 width=1280,
                 height=720,
                 simulationTime=float(index),

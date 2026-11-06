@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from .config import settings
+from .capture_models import (
+    CaptureClaim, CaptureClaimRequest, CaptureFinish, CaptureFrame,
+    CaptureHeartbeat, CaptureTask, CaptureTaskCreate,
+)
+from .capture_store import CaptureTaskStore
 from .models import (
     Dataset,
     DatasetCreate,
@@ -18,7 +24,7 @@ from .models import (
     TrainRequest,
     DatasetValidationResponse,
 )
-from .store import PersistentStore
+from .store import DatasetConflict, PersistentStore
 
 
 app = FastAPI(
@@ -28,13 +34,14 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:45678", "http://127.0.0.1:45678"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 store = PersistentStore(settings.storage_root, settings.database_url)
+capture_store = CaptureTaskStore(store)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -88,9 +95,14 @@ def create_dataset(request: DatasetCreate) -> Dataset:
 @app.post("/api/v1/datasets/{dataset_id}/frames", status_code=status.HTTP_201_CREATED)
 def upload_dataset_frame(dataset_id: str, request: DatasetFrameUpload) -> dict[str, str]:
     try:
+        dataset = store.get_dataset(dataset_id)
+        if dataset and dataset.metadata.get("captureTaskId"):
+            raise DatasetConflict("Agent datasets accept frames through the leased capture task endpoint")
         return store.add_frame(dataset_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DatasetConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -105,16 +117,15 @@ def validate_dataset(dataset_id: str) -> DatasetValidationResponse:
 
 @app.post("/api/v1/datasets/{dataset_id}/finalize", response_model=DatasetFinalizeResponse)
 def finalize_dataset(dataset_id: str) -> DatasetFinalizeResponse:
-    result = store.validate_dataset(dataset_id)
-    if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
-    validation = DatasetValidationResponse.model_validate(result)
-    if not validation.valid:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=validation.model_dump(mode="json"))
-    dataset = store.set_dataset_status(dataset_id, "ready")
-    if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
-    return DatasetFinalizeResponse(dataset=dataset, validation=validation)
+    dataset = store.get_dataset(dataset_id)
+    if dataset and dataset.metadata.get("captureTaskId"):
+        raise HTTPException(status_code=409, detail="Agent datasets are sealed by capture task completion")
+    try:
+        return DatasetFinalizeResponse.model_validate(store.finalize_dataset(dataset_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DatasetConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/v1/datasets/{dataset_id}/manifest")
@@ -137,6 +148,88 @@ def queue_training(request: TrainRequest) -> Job:
             result={"message": "training backend is not connected"},
         )
     )
+
+
+@app.get("/api/v1/datasets", response_model=list[Dataset])
+def list_datasets():
+    return store.list_datasets()
+
+
+@app.get("/api/v1/datasets/{dataset_id}", response_model=Dataset)
+def get_dataset(dataset_id: str):
+    dataset = store.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="dataset not found")
+    return dataset
+
+
+@app.get("/api/v1/datasets/{dataset_id}/images/{frame_id}")
+def get_dataset_image(dataset_id: str, frame_id: str):
+    frame = next((f for f in store._frame_payloads(dataset_id) if f["frameId"] == frame_id), None)
+    if frame:
+        image_path = (store.storage_root / frame["imageUri"]).resolve()
+        if image_path.is_relative_to(store.storage_root) and image_path.is_file():
+            return FileResponse(image_path, media_type=frame["imageMimeType"])
+    raise HTTPException(status_code=404, detail="image not found")
+
+
+def capture_action(action, *args):
+    try:
+        return action(*args)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DatasetConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/capture-tasks", response_model=CaptureTask, status_code=201)
+def create_capture_task(request: CaptureTaskCreate):
+    return capture_action(capture_store.create, request)
+
+
+@app.get("/api/v1/capture-tasks", response_model=list[CaptureTask])
+def list_capture_tasks():
+    return capture_store.list()
+
+
+@app.post("/api/v1/capture-tasks/claim", response_model=CaptureClaim | None)
+def claim_capture_task(request: CaptureClaimRequest):
+    return capture_action(capture_store.claim, request)
+
+
+@app.get("/api/v1/capture-tasks/{task_id}", response_model=CaptureTask)
+def get_capture_task(task_id: str):
+    task = capture_store.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="capture task not found")
+    return task
+
+
+@app.post("/api/v1/capture-tasks/{task_id}/heartbeat", response_model=CaptureTask)
+def capture_heartbeat(task_id: str, request: CaptureHeartbeat):
+    return capture_action(capture_store.heartbeat, task_id, request)
+
+
+@app.post("/api/v1/capture-tasks/{task_id}/frames", status_code=201)
+def capture_upload(task_id: str, request: CaptureFrame):
+    return capture_action(capture_store.upload, task_id, request)
+
+
+@app.post("/api/v1/capture-tasks/{task_id}/finish", response_model=CaptureTask)
+def capture_finish(task_id: str, request: CaptureFinish):
+    return capture_action(capture_store.finish, task_id, request)
+
+
+@app.post("/api/v1/capture-tasks/{task_id}/pause", response_model=CaptureTask)
+def capture_pause(task_id: str):
+    return capture_action(capture_store.pause, task_id)
+
+
+@app.post("/api/v1/capture-tasks/{task_id}/resume", response_model=CaptureTask)
+def capture_resume(task_id: str):
+    return capture_action(capture_store.resume, task_id)
 
 
 @app.post(

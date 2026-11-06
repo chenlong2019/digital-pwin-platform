@@ -272,12 +272,18 @@ export class NeuralRenderHttpClient implements DatasetRegistrationClient {
     sceneVersion?: string
     metadata?: Readonly<Record<string, unknown>>
   }): Promise<void> {
+    const sceneResponse = await this.fetcher(`${this.baseUrl}/api/v1/scenes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scene_id: input.sceneId, name: input.sceneId }),
+    })
+    if (!sceneResponse.ok && sceneResponse.status !== 409) throw new Error(`scene registration failed: ${sceneResponse.status}`)
     const response = await this.fetcher(`${this.baseUrl}/api/v1/datasets`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ dataset_id: input.datasetId, name: input.name, scene_id: input.sceneId, scene_version: input.sceneVersion, metadata: input.metadata }),
     })
-    if (!response.ok && response.status !== 409) throw new Error(`dataset creation failed: ${response.status}`)
+    if (!response.ok) throw new Error(`dataset creation failed: ${response.status}`)
   }
 
   async uploadFrame(datasetId: string, frame: DatasetFrameUpload): Promise<{ imageUri: string }> {
