@@ -120,6 +120,8 @@ try {
       )
       await mkdir(destination, { recursive: true })
       await page.screenshot({ path: path.join(destination, 'console.png'), fullPage: true })
+      await page.getByRole('button', { name: '查看结果 ↓' }).click()
+      await page.screenshot({ path: path.join(destination, 'results.png') })
       for (const name of ['report.json', 'comparison.png', 'model.ply']) {
         const artifact = await fetch(base + name)
         assert.equal(artifact.ok, true)

@@ -45,6 +45,7 @@ const route = useRoute()
 const router = useRouter()
 const plan = campusCapturePlan()
 const stage = ref<InstanceType<typeof CampusCaptureStage> | null>(null)
+const resultsSection = ref<HTMLElement | null>(null)
 const sceneReady = ref(false)
 const connected = ref(false)
 const connecting = ref(false)
@@ -119,6 +120,11 @@ function artifact(name: string): string {
 }
 function describe(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
+}
+
+function showResults(): void {
+  resultsSection.value?.scrollIntoView({ block: 'start' })
+  resultsSection.value?.focus({ preventScroll: true })
 }
 
 async function loadJob(id: string): Promise<void> {
@@ -340,14 +346,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="experiment">
+  <main class="experiment" tabindex="0" aria-labelledby="experiment-title">
     <header class="experiment-header">
       <div>
         <p class="eyebrow">神经渲染 / 算法验证</p>
-        <h1>园区 3DGS 实验</h1>
+        <h1 id="experiment-title">园区 3DGS 实验</h1>
         <p class="subtitle">采集、重建与独立测试，在一次实验中完成。</p>
       </div>
       <nav>
+        <button v-if="report" class="results-link" @click="showResults">查看结果 ↓</button>
         <RouterLink to="/console">控制台</RouterLink><RouterLink to="/">仿真沙盒</RouterLink>
       </nav>
     </header>
@@ -462,9 +469,16 @@ onBeforeUnmount(() => {
         >
       </section>
     </div>
-    <section v-if="report" class="results-card" data-testid="experiment-report">
+    <section
+      v-if="report"
+      ref="resultsSection"
+      class="results-card"
+      data-testid="experiment-report"
+      tabindex="-1"
+      aria-labelledby="experiment-results-title"
+    >
       <div class="section-head">
-        <h2>独立测试结果</h2>
+        <h2 id="experiment-results-title">独立测试结果</h2>
         <div class="downloads">
           <a :href="artifact('report.json')" target="_blank" rel="noreferrer">评价报告</a
           ><a :href="artifact('model.ply')">高斯模型 PLY</a>
@@ -534,6 +548,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .experiment {
+  /* 沙盒锁住 body 滚动；实验页独立滚动，保证下方结果可访问。 */
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
   max-width: 1400px;
   margin: 0 auto;
   padding: 32px 36px 60px;
@@ -564,7 +583,13 @@ h1 {
 nav,
 .downloads {
   display: flex;
+  align-items: center;
   gap: 16px;
+}
+.results-link {
+  color: #9be0cf;
+  background: #153a36;
+  border-color: #397968;
 }
 a {
   color: #8ddac9;
@@ -733,6 +758,7 @@ progress {
 }
 .results-card {
   margin-top: 22px;
+  scroll-margin-top: 20px;
 }
 .metric-grid {
   display: grid;

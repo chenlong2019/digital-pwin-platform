@@ -110,6 +110,90 @@ test('离线时可重新连接，窄屏可以查看完整结果', async ({ page 
   await expect(page.getByAltText('训练后的高斯渲染')).toBeInViewport()
 })
 
+test('桌面滚轮能从采集预览滚动到结果区域', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await mockService(page)
+  await page.goto(`/experiments?job=${jobId}`)
+  const results = page.getByRole('heading', { name: '独立测试结果', exact: true })
+  await expect(results).toBeAttached()
+  await expect(results).not.toBeInViewport()
+
+  // Use actual wheel input. scrollIntoView can move overflow:hidden ancestors
+  // programmatically and would hide this user-facing scrolling regression.
+  await page.mouse.move(400, 450)
+  await page.mouse.wheel(0, 650)
+  await expect
+    .poll(() => page.locator('.experiment').evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(100)
+  await expect(results).toBeInViewport()
+
+  await page.locator('.experiment').focus()
+  await page.keyboard.press('Home')
+  await expect
+    .poll(() => page.locator('.experiment').evaluate((element) => element.scrollTop))
+    .toBe(0)
+  await page.keyboard.press('End')
+  await expect(page.getByAltText('绝对误差放大三倍')).toBeInViewport()
+})
+
+test('顶部查看结果入口可直接定位到指标和图像对比', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await mockService(page)
+  await page.goto(`/experiments?job=${jobId}`)
+  const results = page.getByRole('heading', { name: '独立测试结果', exact: true })
+  await expect(results).toBeAttached()
+  await expect(results).not.toBeInViewport()
+  await page.getByRole('button', { name: '查看结果 ↓' }).click()
+  await expect(results).toBeInViewport()
+  await expect(page.getByTestId('experiment-report')).toBeFocused()
+})
+
+test.describe('触屏滚动', () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } })
+
+  test('手指滑动能到达结果区', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'Native touch gesture verification uses Chromium CDP')
+    await mockService(page)
+    await page.goto(`/experiments?job=${jobId}`)
+    const results = page.getByRole('heading', { name: '独立测试结果', exact: true })
+    await expect(results).toBeAttached()
+    await expect(results).not.toBeInViewport()
+    const session = await page.context().newCDPSession(page)
+    try {
+      for (let swipe = 0; swipe < 3; swipe++) {
+        if (
+          await results.evaluate((element) => {
+            const bounds = element.getBoundingClientRect()
+            return bounds.top >= 0 && bounds.bottom <= innerHeight
+          })
+        )
+          break
+        await session.send('Input.dispatchTouchEvent', {
+          type: 'touchStart',
+          touchPoints: [{ x: 180, y: 700 }],
+        })
+        for (let move = 1; move <= 10; move++) {
+          await session.send('Input.dispatchTouchEvent', {
+            type: 'touchMove',
+            touchPoints: [{ x: 180, y: 700 - move * 45 }],
+          })
+          // Space real touch moves across frames; dwell before release so the
+          // gesture stops at the target instead of introducing a fling.
+          await page.waitForTimeout(20)
+        }
+        await page.waitForTimeout(100)
+        await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      }
+      await expect
+        .poll(() => page.locator('.experiment').evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(100)
+      await expect(results).toBeInViewport()
+    } finally {
+      await session.detach()
+    }
+  })
+})
+
 for (const missingTest of [false, true]) {
   test(`恢复采集后提交已有数据：${missingTest ? '缺少独立测试视角时继续采集' : '先封存再训练'}`, async ({
     page,
