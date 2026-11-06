@@ -273,6 +273,14 @@ class PersistentStore:
             row = connection.execute(f"SELECT payload FROM jobs WHERE job_id = {placeholder}", (job_id,)).fetchone()
         return Job.model_validate(self._json_load(row[0])) if row else None
 
+    def update_job(self, job: Job) -> Job:
+        placeholder = self._placeholder()
+        with self._connect() as connection:
+            connection.execute(f"UPDATE jobs SET payload = {placeholder} WHERE job_id = {placeholder}",
+                               (self._json_dump(job.model_dump(mode="json")), job.job_id))
+            connection.commit()
+        return job
+
     def add_frame(self, dataset_id: str, request: DatasetFrameUpload, connection=None) -> dict[str, Any]:
         if connection is None:
             with self.transaction() as conn:

@@ -1,0 +1,5 @@
+# Install a CUDA-compatible torch build for your machine first (torch >= 2.4).
+# Training runs in an isolated worker; the web API does not import torch.
+torch>=2.4
+numpy>=1.26,<3
+Pillow>=10.4,<13

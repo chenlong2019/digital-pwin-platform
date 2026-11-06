@@ -519,7 +519,9 @@ export class SandboxScene {
     const width = this.renderer.domElement.width
     const height = this.renderer.domElement.height
     const fy = height / 2 / Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)
-    const fx = fy * (width / Math.max(height, 1))
+    // Vertical-FOV projection with square pixels: fx equals fy, regardless of
+    // viewport aspect. Multiplying by aspect distorted exported camera poses.
+    const fx = fy
     return {
       pose: {
         positionM: { x: position.x, y: position.y, z: position.z },

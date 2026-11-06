@@ -6,6 +6,12 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
+      path: '/experiments',
+      name: 'experiments',
+      component: () => import('../views/ExperimentView.vue'),
+      meta: { title: '园区 3DGS 实验' },
+    },
+    {
       path: '/console',
       name: 'console',
       component: () => import('../views/ConsoleView.vue'),

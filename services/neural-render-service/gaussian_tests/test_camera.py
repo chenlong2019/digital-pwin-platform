@@ -1,0 +1,50 @@
+from copy import deepcopy
+import math
+
+import numpy as np
+import pytest
+
+from app.gaussian.camera import frame_camera, validate_split
+
+
+def frame(index=0, split="train"):
+    return {
+        "frameId": f"view-{index}", "width": 256, "height": 192, "metadata": {"split": split},
+        "cameraPose": {"positionM": {"x": index, "y": 2, "z": 5},
+                       "quaternionXyzw": {"x": 0, "y": 0, "z": 0, "w": 1}, "coordinateFrame": "platform-world"},
+        "cameraIntrinsics": {"width": 256, "height": 192, "fx": 100, "fy": 100, "cx": 128, "cy": 96},
+    }
+
+
+def test_opengl_camera_maps_forward_up_right_to_cv_and_pixels():
+    item = frame()
+    camera = frame_camera(item, np.zeros(3), 1)
+    # Camera at (0,2,5); point is 2 right, 1 up, 10 forward.
+    view = camera["rotation"] @ np.array([2, 3, -5]) + camera["translation"]
+    np.testing.assert_allclose(view, [2, -1, 10])
+    np.testing.assert_allclose([camera["fx"]*view[0]/view[2]+camera["cx"],
+                                camera["fy"]*view[1]/view[2]+camera["cy"]], [148, 86])
+
+
+def test_rotated_camera_and_scene_normalization_keep_the_same_projection():
+    item = frame(3)
+    item["cameraPose"]["quaternionXyzw"] = {"x": 0, "y": math.sqrt(.5), "z": 0, "w": math.sqrt(.5)}
+    origin, scale = np.array([100, -5, 25]), 150
+    camera = frame_camera(item, origin, scale)
+    view = camera["rotation"] @ ((np.array([-7, 1, 3])-origin)/scale) + camera["translation"]
+    np.testing.assert_allclose(view*scale, [2, 1, 10], atol=1e-5)
+
+
+@pytest.mark.parametrize("damage", ["same-pose", "opposite-quaternion", "same-id", "missing-split", "resolution", "distortion"])
+def test_training_test_leakage_and_unsupported_calibration_are_rejected(damage):
+    manifest = {"frames": [frame(i, "train" if i < 8 else "test") for i in range(10)]}
+    assert tuple(map(len, validate_split(manifest))) == (8, 2)
+    held_out = manifest["frames"][8]
+    if damage in {"same-pose", "opposite-quaternion"}:
+        held_out["cameraPose"] = deepcopy(manifest["frames"][0]["cameraPose"])
+        if damage == "opposite-quaternion": held_out["cameraPose"]["quaternionXyzw"]["w"] = -1
+    elif damage == "same-id": held_out["frameId"] = "view-0"
+    elif damage == "missing-split": held_out["metadata"] = {}
+    elif damage == "resolution": held_out["width"] = 255
+    else: held_out["cameraIntrinsics"]["distortion"] = [.1]
+    with pytest.raises(ValueError): validate_split(manifest)

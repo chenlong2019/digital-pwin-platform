@@ -101,6 +101,7 @@ const activeTab = ref<TabId>('flight')
       <div class="sandbox__run">
         <span class="hint">{{ runHint }}</span>
         <RouterLink class="sandbox__link" to="/console">控制台</RouterLink>
+        <RouterLink class="sandbox__link" to="/experiments">3DGS 实验</RouterLink>
         <RouterLink class="sandbox__link" to="/grid">电网巡检</RouterLink>
         <RouterLink class="sandbox__link" to="/car">汽车沙盒</RouterLink>
         <RouterLink class="sandbox__link" to="/replay">飞行回放</RouterLink>

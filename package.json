@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "description": "通用智能体仿真与数字孪生平台 · Simulation Core + Agent Core + Sandbox + Task + Recorder + Domain API + Adapter",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "engines": {
     "node": "^22.18.0 || >=24.12.0"
   },
@@ -17,6 +20,7 @@
     "type-check": "npm run check:arch && npm run type-check --workspaces --if-present",
     "verify": "npm run type-check && npm run build",
     "capture:verify": "node scripts/verify-capture-loop.mjs",
+    "experiment:campus": "node scripts/run-campus-experiment.mjs",
     "format": "prettier --write --experimental-cli \"packages/*/src/**/*.ts\" \"apps/*/src/**/*.{ts,vue}\" \"scripts/*.mjs\""
   },
   "devDependencies": {

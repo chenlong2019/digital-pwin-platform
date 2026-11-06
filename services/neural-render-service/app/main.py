@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 
 from .config import settings
 from .capture_models import (
@@ -25,6 +26,7 @@ from .models import (
     DatasetValidationResponse,
 )
 from .store import DatasetConflict, PersistentStore
+from .experiments import ExperimentRequest, runner
 
 
 app = FastAPI(
@@ -140,6 +142,17 @@ def get_dataset_manifest(dataset_id: str) -> dict:
 def queue_training(request: TrainRequest) -> Job:
     if not store.get_dataset(request.dataset_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
+    if request.options.get("workflow") == "campus-3dgs":
+        if request.representation != "3dgs":
+            raise HTTPException(status_code=400, detail="campus workflow requires 3dgs")
+        try:
+            experiment = ExperimentRequest.model_validate({
+                **{key: value for key, value in request.options.items() if key != "workflow"},
+                "dataset_id": request.dataset_id,
+            })
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return capture_action(runner.start, store, experiment)
     return store.create_job(
         Job(
             type="train",
@@ -255,7 +268,33 @@ def get_job(job_id: str) -> Job:
     job = store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
-    return job
+    return runner.refresh(store, job)
+
+
+@app.get("/api/v1/experiments/capabilities")
+def experiment_capabilities():
+    return runner.capabilities()
+
+
+@app.post("/api/v1/experiments", response_model=Job, status_code=202)
+def start_experiment(request: ExperimentRequest):
+    return capture_action(runner.start, store, request)
+
+
+@app.get("/api/v1/experiments/{job_id}/artifacts/{name}")
+def experiment_artifact(job_id: str, name: str):
+    job = store.get_job(job_id)
+    if not job: raise HTTPException(status_code=404, detail="job not found")
+    try: return FileResponse(runner.artifact(store, job, name))
+    except KeyError as error: raise HTTPException(status_code=404, detail="artifact not found") from error
+
+
+@app.post("/api/v1/experiments/{job_id}/stop", response_model=Job)
+def stop_experiment(job_id: str):
+    job = store.get_job(job_id)
+    if not job or job.backend != "torch-3dgs-reference": raise HTTPException(status_code=404, detail="experiment not found")
+    (runner.directory(store, job)/"cancel").touch()
+    return runner.refresh(store, job)
 
 
 if __name__ == "__main__":

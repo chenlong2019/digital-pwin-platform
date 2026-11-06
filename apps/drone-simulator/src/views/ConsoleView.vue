@@ -92,9 +92,9 @@ const workflow = computed(() => [
   {
     number: '04',
     title: '重建',
-    description: '训练神经场并生成可渲染场景',
-    state: '待接入',
-    tone: 'planned',
+    description: '园区 3DGS 训练与独立视角评价',
+    state: '进入 3DGS 实验页',
+    tone: 'idle',
   },
 ])
 
@@ -230,6 +230,9 @@ onScopeDispose(() => {
 
       <div class="console-nav-label">工作区</div>
       <nav class="console-nav" data-testid="console-nav" aria-label="主导航">
+        <RouterLink to="/experiments" class="nav-item" active-class="nav-item--active">
+          <span class="nav-item__icon" aria-hidden="true">◈</span><span>3DGS 实验</span>
+        </RouterLink>
         <RouterLink to="/console" class="nav-item" exact-active-class="nav-item--active">
           <span class="nav-item__icon" aria-hidden="true">⌂</span>
           <span>控制台</span>
@@ -309,11 +312,9 @@ onScopeDispose(() => {
         <div class="console-hero__copy">
           <span class="hero-kicker">NEURAL RENDER PLATFORM</span>
           <h2 id="hero-title">从一次采集，开始验证。</h2>
-          <p>选择场景，设置拍点，检查采集结果。让仿真数据逐步走向神经重建。</p>
+          <p>自动采集园区视角，训练高斯场景，比较独立视角的画质与渲染帧率。</p>
           <div class="hero-links">
-            <RouterLink class="text-link" to="/capture-tasks"
-              >开始一次采集 <span>→</span></RouterLink
-            >
+            <RouterLink class="text-link" to="/experiments">开始园区实验 <span>→</span></RouterLink>
             <RouterLink class="text-link text-link--muted" to="/"
               >打开仿真沙盒 <span>→</span></RouterLink
             >
@@ -547,7 +548,9 @@ onScopeDispose(() => {
             <div>
               <span>神经渲染服务</span><strong>{{ connected ? '已连接' : '未连接' }}</strong>
             </div>
-            <div><span>神经重建</span><strong>待接入算法</strong></div>
+            <div>
+              <span>神经重建</span><RouterLink to="/experiments">园区 3DGS 实验 →</RouterLink>
+            </div>
             <div>
               <span>采集执行端</span
               ><strong>{{

@@ -32,6 +32,12 @@ export interface PointCloudSnapshot {
   readonly error: string
 }
 
+export interface PointCloudSourceIdentity {
+  readonly index_sha256: string
+  readonly overview_sha256: string
+  readonly overview_level: number
+}
+
 interface DetailTile {
   cloud: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>
   lod: PointCloudLod
@@ -77,6 +83,7 @@ export class PointCloudLayer {
   private readonly loader = new PointCloudLoader()
   private readonly lifetime = new AbortController()
   private index: PointCloudIndex | null = null
+  private identity: PointCloudSourceIdentity | null = null
   private material: THREE.ShaderMaterial | null = null
   private coverage: THREE.DataTexture | null = null
   private coverageBytes = new Uint8Array()
@@ -107,7 +114,16 @@ export class PointCloudLayer {
       const indexUrl = new URL(this.options.indexUrl, window.location.href)
       const response = await fetch(indexUrl, { signal: this.lifetime.signal })
       if (!response.ok) throw new Error(`园区索引请求失败 (${response.status})`)
-      const index = parsePointCloudIndex(await response.json())
+      const indexBytes = await response.arrayBuffer()
+      const index = parsePointCloudIndex(JSON.parse(new TextDecoder().decode(indexBytes)))
+      const digest = await crypto.subtle.digest('SHA-256', indexBytes)
+      this.identity = {
+        index_sha256: Array.from(new Uint8Array(digest), (byte) =>
+          byte.toString(16).padStart(2, '0'),
+        ).join(''),
+        overview_sha256: index.overview.sha256,
+        overview_level: index.overview.level,
+      }
       if (this.disposed) return
       this.index = index
       this.coverageBytes = new Uint8Array(index.tiles.length * 4).fill(255)
@@ -301,6 +317,10 @@ export class PointCloudLayer {
       (this.overviewReady ? (this.index?.overview.points ?? 0) : 0) +
       [...this.details.values()].reduce((sum, detail) => sum + detail.lod.points, 0)
     )
+  }
+
+  sourceIdentity(): PointCloudSourceIdentity | null {
+    return this.overviewReady && this.identity ? { ...this.identity } : null
   }
 
   snapshot(): PointCloudSnapshot {
