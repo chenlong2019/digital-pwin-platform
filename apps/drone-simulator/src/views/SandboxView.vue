@@ -25,11 +25,22 @@ import TelemetryPanel from '../components/TelemetryPanel.vue'
 import { SANDBOX_SIMULATION_KEY } from '../simulation/injection'
 import { useSandboxSimulation } from '../simulation/use-sandbox-simulation'
 import { useFlightStick } from '../simulation/use-flight-stick'
+import {
+  campusPointCloud,
+  campusScenario,
+  campusWaypoints,
+} from '../simulation/scenes/campus-scene'
 
-const simulation = useSandboxSimulation({ label: '无人机测试沙盒 · 简单场景' })
+const simulation = useSandboxSimulation({
+  label: '无人机仿真 · 园区点云',
+  scenario: campusScenario(),
+  pointCloud: campusPointCloud,
+  waypoints: campusWaypoints,
+})
 provide(SANDBOX_SIMULATION_KEY, simulation)
 
-const { metrics, telemetry, scenario, sessionLabel, toggleRun, sendMove, sendToDrone, resetDrone } = simulation
+const { metrics, telemetry, scenario, sessionLabel, toggleRun, sendMove, sendToDrone, resetDrone } =
+  simulation
 
 /** 空中才接受键盘输入:地面上推杆没有意义,也免得误发一堆指令 */
 const airborne = computed(() => telemetry.value?.airborne ?? false)
@@ -142,7 +153,11 @@ const activeTab = ref<TabId>('flight')
           <div v-show="activeTab === 'camera'" class="side-pane" data-testid="pane-camera">
             <CameraPanel />
           </div>
-          <div v-show="activeTab === 'sense'" class="side-pane side-pane--stack" data-testid="pane-sense">
+          <div
+            v-show="activeTab === 'sense'"
+            class="side-pane side-pane--stack"
+            data-testid="pane-sense"
+          >
             <RadarPanel />
             <LightsPanel />
           </div>

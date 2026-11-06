@@ -34,10 +34,17 @@ import type { DroneLightsSnapshot, StatusLightKey } from './drone-lights'
 import type { BatteryLightMode, AuxLightMode } from './drone-lights'
 import type { RadarAim, RadarSnapshot } from './drone-radar'
 import { DroneRadar } from './drone-radar'
-import type { CameraMode, CaptureCameraState, PhotoShot, SceneObstacle, SceneWire } from './sandbox-scene'
+import type {
+  CameraMode,
+  CaptureCameraState,
+  PhotoShot,
+  SceneObstacle,
+  SceneWire,
+} from './sandbox-scene'
 import { CAMERA_MODE_LIST, SandboxScene } from './sandbox-scene'
 import type { DroneViewOptions } from './drone-view'
 import { DroneView } from './drone-view'
+import type { PointCloudSceneOptions, PointCloudSnapshot } from './point-cloud-layer'
 
 export interface ThreeRenderAdapterOptions {
   readonly container: HTMLElement
@@ -58,6 +65,7 @@ export interface ThreeRenderAdapterOptions {
   readonly wires?: ReadonlyArray<SceneWire>
   readonly background?: string
   readonly initialCameraTarget?: { x: number; y: number; z: number }
+  readonly pointCloud?: PointCloudSceneOptions
 }
 
 export class ThreeRenderAdapter implements RenderAdapter {
@@ -79,6 +87,7 @@ export class ThreeRenderAdapter implements RenderAdapter {
   private loadError: unknown = null
   /** 雷达射线可视化开关:雷达实例可能晚于页面初始化创建,先缓存再补上;默认不显示 */
   private radarBeamsVisible = false
+  private disposed = false
 
   constructor(options: ThreeRenderAdapterOptions) {
     this.options = options
@@ -110,18 +119,25 @@ export class ThreeRenderAdapter implements RenderAdapter {
   }
 
   async initialize(): Promise<void> {
+    if (this.disposed) return
     const scene = new SandboxScene({
       container: this.options.container,
       obstacles: this.options.obstacles,
       wires: this.options.wires,
       background: this.options.background,
+      pointCloud: this.options.pointCloud,
     })
     this.sandboxScene = scene
     const target = this.options.initialCameraTarget
     scene.resetCamera(target?.x ?? 0, target?.y ?? 1.2, target?.z ?? 0)
+    if (this.options.pointCloud) scene.showSceneOverview()
 
     try {
       const body = await this.loadBody(scene)
+      if (this.disposed) {
+        body.dispose()
+        return
+      }
       this.body = body
       scene.scene.add(body.object3d)
       scene.setHome(0, 0)
@@ -135,6 +151,7 @@ export class ThreeRenderAdapter implements RenderAdapter {
         this.radar = radar
       }
     } catch (error) {
+      if (this.disposed) return
       // 模型载不进来也不该让整个沙盒挂掉:场景仍可交互,只报错
       this.loadError = error
       console.error('[three-adapter] 机体模型载入失败,场景继续可用', error)
@@ -220,6 +237,18 @@ export class ThreeRenderAdapter implements RenderAdapter {
       (this.body?.groundOffsetY ?? 0) + (view?.pose.y ?? 0),
       view?.pose.z ?? 0,
     )
+  }
+
+  showSceneOverview(): void {
+    this.sandboxScene?.showSceneOverview()
+  }
+
+  getPointCloudSnapshot(): PointCloudSnapshot | null {
+    return this.sandboxScene?.getPointCloudSnapshot() ?? null
+  }
+
+  retryPointCloudDetails(): void {
+    this.sandboxScene?.retryPointCloudDetails()
   }
 
   clearTrail(): void {
@@ -351,6 +380,7 @@ export class ThreeRenderAdapter implements RenderAdapter {
   }
 
   dispose(): void {
+    this.disposed = true
     this.radar?.destroy()
     this.radar = null
     this.body?.dispose()

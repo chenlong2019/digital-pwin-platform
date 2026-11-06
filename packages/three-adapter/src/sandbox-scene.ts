@@ -18,6 +18,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { DatasetCameraIntrinsics, DatasetCameraPose } from '@simulation/contracts'
 import type { SceneObstacle, SceneWire } from './drone-world'
 import { DroneWorld } from './drone-world'
+import { PointCloudLayer } from './point-cloud-layer'
+import type { PointCloudSceneOptions, PointCloudSnapshot } from './point-cloud-layer'
 
 export type CameraMode = 'orbit' | 'follow' | 'fpv'
 
@@ -34,6 +36,7 @@ export interface SandboxSceneOptions {
   /** 导线等纯视觉折线,由应用层从资产台账映射得到(不参与避障判定) */
   readonly wires?: ReadonlyArray<SceneWire>
   readonly background?: string
+  readonly pointCloud?: PointCloudSceneOptions
 }
 
 export interface CameraUpdateContext {
@@ -90,7 +93,8 @@ export interface CaptureCameraState {
 }
 
 function pickRecordMime(): string | undefined {
-  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return undefined
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function')
+    return undefined
   return RECORD_MIME_CANDIDATES.find((mime) => MediaRecorder.isTypeSupported(mime))
 }
 
@@ -101,6 +105,11 @@ export class SandboxScene {
   readonly controls: OrbitControls
   /** 场景内容(地面 / 网格 / 返航点 / 障碍物 / 航迹 / 视场检测) */
   readonly world: DroneWorld
+  private readonly pointCloud: PointCloudLayer | null
+  private readonly pointCloudOptions?: PointCloudSceneOptions
+  private readonly captureProbe = new THREE.PerspectiveCamera()
+  private readonly viewportSize = new THREE.Vector2()
+  private overviewMode = false
 
   private readonly container: HTMLElement
   private readonly keyLight: THREE.DirectionalLight
@@ -184,6 +193,16 @@ export class SandboxScene {
     // —— 场景内容交给 DroneWorld(地面 / 网格 / 返航点 / 障碍物 / 导线 / 航迹) ——
     this.world = new DroneWorld(this.scene, [...(options.obstacles ?? [])])
     if (options.wires?.length) this.world.setWires(options.wires)
+    this.pointCloudOptions = options.pointCloud
+    this.pointCloud = options.pointCloud
+      ? new PointCloudLayer(this.scene, options.pointCloud)
+      : null
+    if (this.pointCloud) {
+      this.world.setGroundVisible(false)
+      this.world.setObstacleWireframe()
+      this.world.setObstaclesVisible(false)
+      this.controls.maxDistance = 1200
+    }
 
     this.axes = new THREE.AxesHelper(1.6)
     this.axes.position.y = 0.01
@@ -201,6 +220,7 @@ export class SandboxScene {
   }
 
   setCameraMode(mode: CameraMode): void {
+    this.overviewMode = false
     const previous = this.mode
     this.mode = mode
     this.controls.enabled = mode === 'orbit'
@@ -216,10 +236,10 @@ export class SandboxScene {
   }
 
   /** 只在倍数真的变了才动投影矩阵 —— 每帧重算会让画面持续闪 */
-  private applyZoom(zoom: number): void {
-    if (Math.abs(this.camera.zoom - zoom) <= 1e-3) return
-    this.camera.zoom = zoom
-    this.camera.updateProjectionMatrix()
+  private applyZoom(zoom: number, camera = this.camera): void {
+    if (Math.abs(camera.zoom - zoom) <= 1e-3) return
+    camera.zoom = zoom
+    camera.updateProjectionMatrix()
   }
 
   /**
@@ -239,7 +259,7 @@ export class SandboxScene {
     transform.getWorldQuaternion(camera.quaternion)
     this.cameraDirection.set(0, 0, -1).applyQuaternion(camera.quaternion)
     camera.position.addScaledVector(this.cameraDirection, GIMBAL_CAMERA_OFFSET)
-    this.applyZoom(zoom)
+    this.applyZoom(zoom, camera)
     return true
   }
 
@@ -249,6 +269,47 @@ export class SandboxScene {
     this.cameraTarget.set(x, y, z)
     this.controls.target.set(x, y, z)
     this.controls.update()
+  }
+
+  showSceneOverview(): void {
+    const bounds = this.pointCloudOptions?.bounds
+    if (!bounds) return
+    this.setCameraMode('orbit')
+    this.overviewMode = true
+    this.applyZoom(1)
+    const box = new THREE.Box3(new THREE.Vector3(...bounds.min), new THREE.Vector3(...bounds.max))
+    const target = box.getCenter(new THREE.Vector3())
+    target.y = bounds.max[1]! * 0.25
+    const vertical = THREE.MathUtils.degToRad(this.camera.fov / 2)
+    const direction = new THREE.Vector3(0.65, 0.72, 1).normalize()
+    const right = new THREE.Vector3().crossVectors(this.camera.up, direction).normalize()
+    const up = new THREE.Vector3().crossVectors(direction, right)
+    let distance = 0
+    for (const x of [box.min.x, box.max.x])
+      for (const y of [box.min.y, box.max.y])
+        for (const z of [box.min.z, box.max.z]) {
+          const corner = new THREE.Vector3(x, y, z).sub(target)
+          distance = Math.max(
+            distance,
+            corner.dot(direction) +
+              Math.max(
+                Math.abs(corner.dot(up)) / Math.tan(vertical),
+                Math.abs(corner.dot(right)) / (Math.tan(vertical) * this.camera.aspect),
+              ),
+          )
+        }
+    this.camera.position.copy(target).addScaledVector(direction, distance * 1.08)
+    this.cameraTarget.copy(target)
+    this.controls.target.copy(target)
+    this.controls.update()
+  }
+
+  getPointCloudSnapshot(): PointCloudSnapshot | null {
+    return this.pointCloud?.snapshot() ?? null
+  }
+
+  retryPointCloudDetails(): void {
+    this.pointCloud?.retryDetails()
   }
 
   /** 每帧更新相机 —— 三种模式共用一个入口,保证画面与遥测看的是同一个位姿 */
@@ -267,7 +328,9 @@ export class SandboxScene {
     if (this.mode === 'follow') {
       const rad = (context.headingDeg * Math.PI) / 180
       this.forwardVector.set(Math.sin(rad), 0, -Math.cos(rad))
-      this.followPosition.set(context.x, context.y, context.z).addScaledVector(this.forwardVector, -FOLLOW_DISTANCE)
+      this.followPosition
+        .set(context.x, context.y, context.z)
+        .addScaledVector(this.forwardVector, -FOLLOW_DISTANCE)
       this.followPosition.y += FOLLOW_HEIGHT
       this.camera.position.lerp(this.followPosition, Math.min(1, delta * 4))
       this.followLookAt.set(context.x, context.y + 0.6, context.z)
@@ -275,6 +338,7 @@ export class SandboxScene {
       return
     }
 
+    if (this.overviewMode) return
     // 观察者:轨道控制器接管,但控制点平滑跟住飞机,避免飞出视野后找不回来
     this.followLookAt.set(context.x, context.y, context.z)
     this.cameraTarget.lerp(this.followLookAt, Math.min(1, delta * 2.2))
@@ -327,6 +391,18 @@ export class SandboxScene {
     // 轨道控制器只在观察者视角接管:它的 update() 每帧都会 lookAt(target),
     // 在机载 / 跟随模式下会把刚摆好的云台朝向强行拽回去(旧项目 firstapp 的同一处教训)
     if (this.mode === 'orbit') this.controls.update()
+
+    if (this.pointCloud) {
+      const cameras = [this.camera]
+      // Detail scheduling includes the actual gimbal view used for photos/video.
+      // The portable overview covers every tile while detail is in flight.
+      if (this.mode !== 'fpv' && (this.photoRequest || this.captureTrack)) {
+        this.captureProbe.copy(this.camera)
+        if (this.applyGimbalPose(this.captureProbe, this.captureTransform, this.captureZoom))
+          cameras.push(this.captureProbe)
+      }
+      this.pointCloud.update(cameras, this.renderer.getSize(this.viewportSize).y)
+    }
 
     // 录像:先交一帧云台取景给录制器(用户视角另渲)
     this.captureRecordingFrame()
@@ -407,8 +483,14 @@ export class SandboxScene {
    */
   requestPhoto(): Promise<PhotoShot | null> {
     if (this.photoRequest) return Promise.resolve(null)
+    const pointCloudState = this.pointCloud?.snapshot().state
+    if (pointCloudState === 'loading' || pointCloudState === 'error') return Promise.resolve(null)
     return new Promise<PhotoShot | null>((resolve) => {
-      const request: NonNullable<SandboxScene['photoRequest']> = { resolve, timer: 0, restore: null }
+      const request: NonNullable<SandboxScene['photoRequest']> = {
+        resolve,
+        timer: 0,
+        restore: null,
+      }
       request.timer = window.setTimeout(() => {
         if (this.photoRequest !== request) return
         this.photoRequest = null
@@ -436,7 +518,7 @@ export class SandboxScene {
 
     const width = this.renderer.domElement.width
     const height = this.renderer.domElement.height
-    const fy = (height / 2) / Math.tan((THREE.MathUtils.degToRad(this.camera.fov) / 2))
+    const fy = height / 2 / Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)
     const fx = fy * (width / Math.max(height, 1))
     return {
       pose: {
@@ -498,7 +580,8 @@ export class SandboxScene {
   startRecording(): boolean {
     if (this.recorder) return true
     const canvas = this.renderer.domElement
-    if (typeof MediaRecorder === 'undefined' || typeof canvas.captureStream !== 'function') return false
+    if (typeof MediaRecorder === 'undefined' || typeof canvas.captureStream !== 'function')
+      return false
 
     // 录制源用独立离屏画布:每帧只往里搬一帧云台取景,主画布上用户视角的渲染
     // 永远不会污染录制流(画布捕获按"绘制之后"抓帧,直接抓主画布会录到用户视角)。
@@ -559,7 +642,9 @@ export class SandboxScene {
         this.recordStream = null
         this.captureTrack = null
         this.recordContext = null
-        resolve(chunks.length ? new Blob(chunks, { type: recorder.mimeType || 'video/webm' }) : null)
+        resolve(
+          chunks.length ? new Blob(chunks, { type: recorder.mimeType || 'video/webm' }) : null,
+        )
       }
       // 部分环境可能不派发 onstop,兜底收尾
       const timer = window.setTimeout(finish, RECORD_STOP_TIMEOUT_MS)
@@ -605,6 +690,7 @@ export class SandboxScene {
 
     this.resizeObserver.disconnect()
     this.controls.dispose()
+    this.pointCloud?.dispose()
     this.world.destroy()
     this.scene.remove(this.axes)
     this.axes.dispose()

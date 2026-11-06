@@ -36,6 +36,7 @@ import type {
   BatteryLightMode,
   DroneLightsSnapshot,
   PhotoShot,
+  PointCloudSceneOptions,
   RadarAim,
   RadarSnapshot,
   StatusLightKey,
@@ -79,6 +80,8 @@ export type {
 
 export interface UseSandboxSimulationOptions {
   readonly scenario?: Scenario
+  readonly pointCloud?: PointCloudSceneOptions
+  readonly waypoints?: ReadonlyArray<Waypoint>
   readonly label?: string
   /** 构造后立即启动仿真,默认 true */
   readonly autoStart?: boolean
@@ -94,6 +97,7 @@ export interface UseSandboxSimulationOptions {
 }
 
 export interface SandboxSimulation extends SimulationSessionView {
+  readonly initialWaypoints: ReadonlyArray<Waypoint>
   readonly scenario: Scenario
   readonly sessionLabel: string
   readonly droneId: AgentId
@@ -271,7 +275,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
   const lights = shallowRef<DroneLightsSnapshot | null>(null)
 
   const cameraMode = ref<CameraMode>('orbit')
-  const obstaclesVisible = ref(true)
+  const obstaclesVisible = ref(!options.pointCloud)
   const axesVisible = ref(false)
   const wiresVisible = ref(true)
   const radarAim = ref<RadarAim>('forward')
@@ -365,10 +369,12 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
 
   function frame(timestamp: number): void {
     frameId = window.requestAnimationFrame(frame)
-    const delta = lastFrameTime === 0 ? 0 : Math.min((timestamp - lastFrameTime) / 1000, MAX_FRAME_DELTA)
+    const delta =
+      lastFrameTime === 0 ? 0 : Math.min((timestamp - lastFrameTime) / 1000, MAX_FRAME_DELTA)
     lastFrameTime = timestamp
 
-    if (delta > 0) smoothedFps = smoothedFps === 0 ? 1 / delta : smoothedFps * 0.9 + (1 / delta) * 0.1
+    if (delta > 0)
+      smoothedFps = smoothedFps === 0 ? 1 / delta : smoothedFps * 0.9 + (1 / delta) * 0.1
 
     // 仿真推进(暂停时返回 0)与渲染分开:暂停后画面仍可自由环视
     stepsThisFrame = session.advance(delta)
@@ -487,7 +493,9 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     datasetCapture.value = service
   }
 
-  async function captureDatasetFrame(metadata?: Readonly<Record<string, unknown>>): Promise<DatasetFrame | null> {
+  async function captureDatasetFrame(
+    metadata?: Readonly<Record<string, unknown>>,
+  ): Promise<DatasetFrame | null> {
     const service = datasetCapture.value
     if (!service) throw new Error('请先创建数据集采集会话')
     const frame = await service.captureFrame(metadata)
@@ -500,14 +508,15 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
 
   function startDatasetAutoCapture(options: AutoCaptureOptions = {}): boolean {
     const service = datasetCapture.value
-    const started = service?.startAutoCapture({
-      ...options,
-      metadata: () => ({
-        source: 'drone-simulator',
-        sceneId: scenario.id,
-        ...(typeof options.metadata === 'function' ? options.metadata() : options.metadata),
-      }),
-    }) ?? false
+    const started =
+      service?.startAutoCapture({
+        ...options,
+        metadata: () => ({
+          source: 'drone-simulator',
+          sceneId: scenario.id,
+          ...(typeof options.metadata === 'function' ? options.metadata() : options.metadata),
+        }),
+      }) ?? false
     datasetAutoCapturing.value = started
     return started
   }
@@ -556,7 +565,7 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
     const id = session.createWaypointTask({
       agentId: droneId,
       label: `航点任务 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`,
-      waypoints: waypoints ?? defaultWaypoints(),
+      waypoints: waypoints ?? options.waypoints ?? defaultWaypoints(),
       holdSeconds: 2,
       landAtEnd: true,
     })
@@ -760,6 +769,8 @@ export function useSandboxSimulation(options: UseSandboxSimulationOptions = {}):
 
   return {
     scenario,
+    pointCloud: options.pointCloud,
+    initialWaypoints: options.waypoints ?? defaultWaypoints(),
     sessionLabel: session.session.label,
     droneId,
     obstacles: scenarioToSceneObstacles(scenario),

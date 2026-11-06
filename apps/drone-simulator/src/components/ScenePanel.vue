@@ -20,6 +20,7 @@ const {
   telemetry,
   rendererInfo,
   obstacles,
+  pointCloud,
   wires,
   obstaclesVisible,
   axesVisible,
@@ -72,7 +73,13 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
     <header class="panel__head">
       <span class="panel__title">场景与环境</span>
       <span class="tag" :class="rendererInfo.state === 'ready' ? 'tag--ok' : 'tag--warn'">
-        {{ rendererInfo.state === 'ready' ? '渲染就绪' : rendererInfo.state === 'error' ? '渲染降级' : '渲染载入中' }}
+        {{
+          rendererInfo.state === 'ready'
+            ? '渲染就绪'
+            : rendererInfo.state === 'error'
+              ? '渲染降级'
+              : '渲染载入中'
+        }}
       </span>
     </header>
 
@@ -98,12 +105,26 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
           <span class="field-label">风速</span>
           <span class="mono readout">{{ formatNumber(liveWind.speed, 1) }} m/s</span>
         </div>
-        <input v-model.number="windSpeed" type="range" min="0" max="12" step="0.5" @input="applyWind" />
+        <input
+          v-model.number="windSpeed"
+          type="range"
+          min="0"
+          max="12"
+          step="0.5"
+          @input="applyWind"
+        />
         <div class="row row--between">
           <span class="field-label">风向(风吹向)</span>
           <span class="mono readout">{{ formatNumber(liveWind.directionDeg, 0) }}°</span>
         </div>
-        <input v-model.number="windDirection" type="range" min="0" max="359" step="1" @input="applyWind" />
+        <input
+          v-model.number="windDirection"
+          type="range"
+          min="0"
+          max="359"
+          step="1"
+          @input="applyWind"
+        />
         <div class="row row--between hint">
           <span>机体感受到的相对风</span>
           <span class="mono">{{ windRelative }}</span>
@@ -117,7 +138,9 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
           <span class="hint mono readout">沙盒当前:{{ liveWeatherLabel }}</span>
         </div>
         <select v-model="weather" @change="applyWeather">
-          <option v-for="item in WEATHER_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
+          <option v-for="item in WEATHER_OPTIONS" :key="item.key" :value="item.key">
+            {{ item.label }}
+          </option>
         </select>
       </div>
 
@@ -125,8 +148,19 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
       <div class="group">
         <span class="field-label">可视化</span>
         <div class="grid">
-          <button :class="{ active: obstaclesVisible }" @click="setObstaclesVisible(!obstaclesVisible)">
-            {{ obstaclesVisible ? '隐藏障碍物' : '显示障碍物' }}
+          <button
+            :class="{ active: obstaclesVisible }"
+            @click="setObstaclesVisible(!obstaclesVisible)"
+          >
+            {{
+              pointCloud
+                ? obstaclesVisible
+                  ? '隐藏避障范围'
+                  : '显示避障范围'
+                : obstaclesVisible
+                  ? '隐藏障碍物'
+                  : '显示障碍物'
+            }}
           </button>
           <button :class="{ active: axesVisible }" @click="setAxesVisible(!axesVisible)">
             {{ axesVisible ? '隐藏坐标轴' : '显示坐标轴' }}
@@ -147,9 +181,18 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
       <div class="group">
         <span class="field-label">场景</span>
         <dl class="info">
-          <div><dt>标识</dt><dd class="mono">{{ scenario.id }}</dd></div>
-          <div><dt>确定性种子</dt><dd class="mono">{{ scenario.seed }}</dd></div>
-          <div><dt>障碍物</dt><dd class="mono">{{ obstacles.length }} 个 AABB</dd></div>
+          <div>
+            <dt>标识</dt>
+            <dd class="mono">{{ scenario.id }}</dd>
+          </div>
+          <div>
+            <dt>确定性种子</dt>
+            <dd class="mono">{{ scenario.seed }}</dd>
+          </div>
+          <div>
+            <dt>{{ pointCloud ? '简化避障范围' : '障碍物' }}</dt>
+            <dd class="mono">{{ obstacles.length }} 个</dd>
+          </div>
           <div v-if="wires && wires.length > 0">
             <dt>导线</dt>
             <dd class="mono">{{ wires.length }} 条(纯视觉,不参与避障)</dd>
@@ -158,10 +201,14 @@ const missingParts = computed(() => parts.value.filter((part) => !part.found))
             <dt>电子围栏</dt>
             <dd class="mono">
               {{ scenario.geofence.maxX - scenario.geofence.minX }} ×
-              {{ scenario.geofence.maxZ - scenario.geofence.minZ }} m · {{ scenario.geofence.maxAltitude }} m 限高
+              {{ scenario.geofence.maxZ - scenario.geofence.minZ }} m ·
+              {{ scenario.geofence.maxAltitude }} m 限高
             </dd>
           </div>
         </dl>
+        <p v-if="pointCloud" class="hint">
+          避障范围由点云生成，近似建筑与绿化外形；地面按起飞点高度处理。
+        </p>
       </div>
 
       <!-- 模型自检 -->

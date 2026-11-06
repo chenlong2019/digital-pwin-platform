@@ -22,6 +22,7 @@ import type {
   CaptureCameraState,
   DroneLightsSnapshot,
   PhotoShot,
+  PointCloudSceneOptions,
   RadarAim,
   RadarSnapshot,
   RigPartReport,
@@ -131,6 +132,7 @@ export interface SimulationSessionView {
    * 它把 obstacles 与 wires 一起交给渲染适配器,不需要知道这是哪个行业。
    */
   readonly wires?: ReadonlyArray<SceneWire>
+  readonly pointCloud?: PointCloudSceneOptions
   /**
    * 机体可视化工厂 —— 视口据此决定加载哪种模型。
    * 不提供 = 无人机(适配器的默认),所以无人机会话不需要写这一项。

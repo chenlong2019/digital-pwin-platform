@@ -9,8 +9,8 @@
  * 它不碰仿真:每帧的 `advance()` 由会话自己的 rAF 循环驱动,
  * 这里只负责「渲染器有了/没了」这两件事。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { CameraMode } from '@simulation/three-adapter'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import type { CameraMode, PointCloudSnapshot } from '@simulation/three-adapter'
 import { CAMERA_MODE_LIST, ThreeRenderAdapter } from '@simulation/three-adapter'
 import { useSession } from '../simulation/injection'
 import { formatSimulationClock } from '../utils/format'
@@ -22,6 +22,7 @@ const {
   projector,
   obstacles,
   wires,
+  pointCloud,
   bodyFactory,
   cameraTarget,
   cameraMode,
@@ -29,10 +30,24 @@ const {
   refreshRendererInfo,
   notifyRendererError,
   setCameraMode,
+  resetCamera,
 } = useSession()
 
 const container = ref<HTMLDivElement | null>(null)
 let adapter: ThreeRenderAdapter | null = null
+const cloudStatus = shallowRef<PointCloudSnapshot | null>(null)
+let statusTimer = 0
+let disposed = false
+const cloudStatusText = computed(() => {
+  const status = cloudStatus.value
+  if (!status || status.state === 'loading') return '园区概览载入中…'
+  if (status.state === 'error') return '园区点云载入失败'
+  if (status.state === 'degraded') return '概览可用 · 细节暂不可用'
+  return status.loadingTiles ? '园区已就绪 · 正在补充细节' : '园区点云已就绪'
+})
+const pointCountText = computed(
+  () => `${((cloudStatus.value?.renderedPoints ?? 0) / 10_000).toFixed(1)} 万点`,
+)
 
 const statusText = computed(() => {
   switch (metrics.value.status) {
@@ -46,7 +61,11 @@ const statusText = computed(() => {
 })
 
 const statusClass = computed(() =>
-  metrics.value.status === 'running' ? 'tag tag--ok' : metrics.value.status === 'paused' ? 'tag tag--warn' : 'tag',
+  metrics.value.status === 'running'
+    ? 'tag tag--ok'
+    : metrics.value.status === 'paused'
+      ? 'tag tag--warn'
+      : 'tag',
 )
 
 function describeError(error: unknown): string {
@@ -66,6 +85,7 @@ async function mountRenderer(): Promise<void> {
     obstacles,
     // 导线等纯视觉元素:视口只知道「场景还有这些折线」,不知道它们是输电导线
     wires,
+    pointCloud,
     initialCameraTarget: cameraTarget ?? { x: 0, y: 1.2, z: 0 },
   })
   adapter = next
@@ -73,12 +93,14 @@ async function mountRenderer(): Promise<void> {
 
   try {
     await next.initialize()
+    if (disposed) return
     if (next.error) {
       notifyRendererError(`机体模型载入失败:${describeError(next.error)}`)
     } else {
       refreshRendererInfo()
     }
   } catch (error) {
+    if (disposed) return
     notifyRendererError(`场景初始化失败:${describeError(error)}`)
   }
 }
@@ -87,11 +109,31 @@ function selectCamera(mode: CameraMode): void {
   setCameraMode(mode)
 }
 
+function showOverview(): void {
+  setCameraMode('orbit')
+  adapter?.showSceneOverview()
+}
+
+function focusDrone(): void {
+  setCameraMode('orbit')
+  resetCamera()
+}
+
+function retryDetails(): void {
+  adapter?.retryPointCloudDetails()
+}
+
 onMounted(() => {
   void mountRenderer()
+  if (pointCloud)
+    statusTimer = window.setInterval(() => {
+      cloudStatus.value = adapter?.getPointCloudSnapshot() ?? null
+    }, 300)
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  if (statusTimer) window.clearInterval(statusTimer)
   attachRenderer(null)
   adapter?.dispose()
   adapter = null
@@ -129,6 +171,10 @@ onBeforeUnmount(() => {
     <!-- 右上:相机模式 -->
     <div class="viewport__hud viewport__hud--tr">
       <div class="camera-switch">
+        <button v-if="pointCloud" data-testid="campus-overview" @click="showOverview">
+          园区全景
+        </button>
+        <button v-if="pointCloud" @click="focusDrone">聚焦无人机</button>
         <button
           v-for="item in CAMERA_MODE_LIST"
           :key="item.key"
@@ -142,6 +188,24 @@ onBeforeUnmount(() => {
         <span class="hud-key">模型</span>
         <span class="mono hud-value">{{ rendererInfo.modelHealth || '载入中…' }}</span>
       </div>
+    </div>
+
+    <div
+      v-if="pointCloud"
+      class="viewport__cloud"
+      data-testid="campus-status"
+      :data-state="cloudStatus?.state ?? 'loading'"
+      :data-points="cloudStatus?.renderedPoints ?? 0"
+    >
+      <span class="cloud-dot" :class="`cloud-dot--${cloudStatus?.state ?? 'loading'}`" />
+      <div>
+        <strong>{{ cloudStatusText }}</strong>
+        <span v-if="cloudStatus?.overviewPoints"
+          >{{ pointCountText }} · 米制场景 · 南侧道路起飞</span
+        >
+        <span v-if="cloudStatus?.state === 'error'">{{ cloudStatus.error }}</span>
+      </div>
+      <button v-if="cloudStatus?.state === 'degraded'" @click="retryDetails">重试细节</button>
     </div>
 
     <div v-if="rendererInfo.state === 'error'" class="viewport__error">
@@ -254,5 +318,42 @@ onBeforeUnmount(() => {
   background: rgba(6, 13, 18, 0.9);
   border: 1px solid rgba(255, 196, 107, 0.4);
   border-radius: 8px;
+}
+
+.viewport__cloud {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(6, 13, 18, 0.84);
+  font-size: 11px;
+}
+.viewport__cloud strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+}
+.viewport__cloud span:not(.cloud-dot) {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-faint);
+}
+.cloud-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.cloud-dot--loading,
+.cloud-dot--degraded {
+  background: var(--warn);
+}
+.cloud-dot--error {
+  background: var(--danger);
 }
 </style>

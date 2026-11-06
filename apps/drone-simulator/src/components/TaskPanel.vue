@@ -7,13 +7,22 @@
  * 换个机型,同一个任务原样能跑 —— 面板这边一点都不用改。
  */
 import { computed, ref } from 'vue'
-import { defaultWaypoints } from '@simulation/task-core'
 import { useSandbox } from '../simulation/injection'
 import { formatMeters, formatNumber } from '../utils/format'
 
-const { task, taskResult, createWaypointTask, startTask, pauseTask, resumeTask, abortTask, telemetry } = useSandbox()
+const {
+  task,
+  taskResult,
+  createWaypointTask,
+  startTask,
+  pauseTask,
+  resumeTask,
+  abortTask,
+  telemetry,
+  initialWaypoints,
+} = useSandbox()
 
-const waypoints = ref(defaultWaypoints())
+const waypoints = ref([...initialWaypoints])
 
 const METRIC_LABELS: Record<string, string> = {
   waypointsReached: '已到达航点',
@@ -68,7 +77,11 @@ const canCreate = computed(() => telemetry.value?.airborne !== true)
 const resultMetrics = computed(() => {
   const result = taskResult.value
   if (!result) return []
-  return Object.entries(result.metrics).map(([key, value]) => ({ key, label: METRIC_LABELS[key] ?? key, value }))
+  return Object.entries(result.metrics).map(([key, value]) => ({
+    key,
+    label: METRIC_LABELS[key] ?? key,
+    value,
+  }))
 })
 
 function create(): void {
@@ -90,7 +103,8 @@ function create(): void {
           <span class="waypoint__index mono">{{ index + 1 }}</span>
           <span class="waypoint__label">{{ waypoint.label }}</span>
           <span class="waypoint__coord mono">
-            E {{ formatNumber(waypoint.x, 0) }} / S {{ formatNumber(waypoint.z, 0) }} · {{ formatMeters(waypoint.altitude, 0) }}
+            E {{ formatNumber(waypoint.x, 0) }} / S {{ formatNumber(waypoint.z, 0) }} ·
+            {{ formatMeters(waypoint.altitude, 0) }}
           </span>
         </div>
       </div>
@@ -140,8 +154,8 @@ function create(): void {
       </div>
 
       <p class="hint">
-        任务只发平台指令(agent.takeOff / agent.move / agent.land / agent.hover),不认识「无人机」这个概念,
-        所以同一份实现可以直接驱动车 / 船 / 机器人。
+        任务只发平台指令(agent.takeOff / agent.move / agent.land /
+        agent.hover),不认识「无人机」这个概念, 所以同一份实现可以直接驱动车 / 船 / 机器人。
       </p>
     </div>
   </section>

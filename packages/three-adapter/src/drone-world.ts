@@ -47,15 +47,70 @@ export interface SceneWire {
 
 /** 默认障碍物:两组建筑 + 一根正前方灯杆 + 三棵树 + 一道悬空天桥,都在起飞点 30 米内 */
 export const DEFAULT_OBSTACLES: SceneObstacle[] = [
-  { name: 'BUILDING_A', label: '建筑 A', x: 16, z: -12, width: 9, depth: 9, height: 13, color: 0x2c3a44 },
-  { name: 'BUILDING_B', label: '建筑 B', x: -20, z: 10, width: 11, depth: 15, height: 7, color: 0x2a3740 },
+  {
+    name: 'BUILDING_A',
+    label: '建筑 A',
+    x: 16,
+    z: -12,
+    width: 9,
+    depth: 9,
+    height: 13,
+    color: 0x2c3a44,
+  },
+  {
+    name: 'BUILDING_B',
+    label: '建筑 B',
+    x: -20,
+    z: 10,
+    width: 11,
+    depth: 15,
+    height: 7,
+    color: 0x2a3740,
+  },
   // 正前方细柱(灯杆,直径 0.3 m):验证"正前方中线"盲区是否真的被消除(两条镜头视场在中线重叠)。
   // 放 16m:在 18m 量程内,又不至于挡住起飞点正前方的平飞测试路径
-  { name: 'LAMP_POST', label: '灯杆', x: 0, z: -16, width: 0.3, depth: 0.3, height: 8, color: 0x44535f },
+  {
+    name: 'LAMP_POST',
+    label: '灯杆',
+    x: 0,
+    z: -16,
+    width: 0.3,
+    depth: 0.3,
+    height: 8,
+    color: 0x44535f,
+  },
   // 悬空天桥:桥底离地 7.5 m,横跨起飞点后方(x 向 18 m 宽),用来演示机体上方的视觉测距
-  { name: 'SKY_BRIDGE', label: '天桥', x: 0, z: 10.5, width: 18, depth: 6, height: 2, color: 0x3a4a55, baseY: 7.5 },
-  { name: 'TREE_1', label: '树 1', x: 9, z: 14, width: 3.2, depth: 3.2, height: 6, color: 0x24443a },
-  { name: 'TREE_2', label: '树 2', x: -10, z: -17, width: 2.8, depth: 2.8, height: 4.6, color: 0x21403a },
+  {
+    name: 'SKY_BRIDGE',
+    label: '天桥',
+    x: 0,
+    z: 10.5,
+    width: 18,
+    depth: 6,
+    height: 2,
+    color: 0x3a4a55,
+    baseY: 7.5,
+  },
+  {
+    name: 'TREE_1',
+    label: '树 1',
+    x: 9,
+    z: 14,
+    width: 3.2,
+    depth: 3.2,
+    height: 6,
+    color: 0x24443a,
+  },
+  {
+    name: 'TREE_2',
+    label: '树 2',
+    x: -10,
+    z: -17,
+    width: 2.8,
+    depth: 2.8,
+    height: 4.6,
+    color: 0x21403a,
+  },
   { name: 'TREE_3', label: '树 3', x: 24, z: 7, width: 3, depth: 3, height: 5.4, color: 0x24443a },
 ]
 
@@ -64,6 +119,7 @@ const TRAIL_MAX_POINTS = 2400
 export class DroneWorld {
   private readonly scene: THREE.Scene
   private readonly group = new THREE.Group()
+  private readonly groundGroup = new THREE.Group()
   private readonly homeMarker = new THREE.Object3D()
   private readonly obstacles: THREE.Object3D[] = []
   private readonly disposables: Array<THREE.BufferGeometry | THREE.Material | THREE.Texture> = []
@@ -93,17 +149,20 @@ export class DroneWorld {
     ground.rotation.x = -Math.PI / 2
     ground.position.y = -0.012
     ground.receiveShadow = true
-    this.group.add(ground)
+    this.groundGroup.add(ground)
 
     const fineGrid = new THREE.GridHelper(200, 200, 0x1d3d42, 0x143033)
     fineGrid.position.y = 0
     this.tintGrid(fineGrid, 0.55)
-    this.group.add(fineGrid)
+    this.groundGroup.add(fineGrid)
+    this.disposables.push(fineGrid.geometry)
 
     const coarseGrid = new THREE.GridHelper(2000, 20, 0x2f6f72, 0x1f4a4d)
     coarseGrid.position.y = 0.004
     this.tintGrid(coarseGrid, 0.75)
-    this.group.add(coarseGrid)
+    this.groundGroup.add(coarseGrid)
+    this.disposables.push(coarseGrid.geometry)
+    this.group.add(this.groundGroup)
 
     // —— 返航点标记:地面上一个 H 环 + 竖直光柱 ——
     const ringGeometry = new THREE.RingGeometry(1.1, 1.5, 40)
@@ -201,7 +260,11 @@ export class DroneWorld {
     if (Number.isNaN(this.lastTrailPoint.x)) {
       this.lastTrailPoint.set(x, y, z)
     }
-    const moved = Math.hypot(x - this.lastTrailPoint.x, y - this.lastTrailPoint.y, z - this.lastTrailPoint.z)
+    const moved = Math.hypot(
+      x - this.lastTrailPoint.x,
+      y - this.lastTrailPoint.y,
+      z - this.lastTrailPoint.z,
+    )
     if (moved < 0.25) return
     if (this.trailCount >= TRAIL_MAX_POINTS) return
     this.trailPositions[this.trailCount * 3] = x
@@ -229,6 +292,24 @@ export class DroneWorld {
     this.obstacles.forEach((obstacle) => {
       obstacle.visible = visible
     })
+  }
+
+  setGroundVisible(visible: boolean): void {
+    this.groundGroup.visible = visible
+  }
+
+  /** Campus proxies are diagnostics; the point cloud supplies the actual appearance. */
+  setObstacleWireframe(): void {
+    for (const obstacle of this.obstacles) {
+      if (!(obstacle instanceof THREE.Mesh)) continue
+      const material = obstacle.material as THREE.MeshStandardMaterial
+      material.wireframe = true
+      material.transparent = true
+      material.opacity = 0.25
+      material.depthWrite = false
+      obstacle.castShadow = false
+      obstacle.receiveShadow = false
+    }
   }
 
   /**

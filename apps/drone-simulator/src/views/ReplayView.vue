@@ -31,8 +31,15 @@ import { buildTaskResult, exportTaskResult, summarizeTaskResult } from '@simulat
 import type { ResultFormat, TaskResultReport } from '@simulation/result'
 import { useReplayStore } from '../simulation/replay-store'
 import { scenarioToSceneObstacles } from '../simulation/scene-mapping'
+import { CAMPUS_SCENE_ID, campusPointCloud } from '../simulation/scenes/campus-scene'
 import { downloadBlob, timestampTag } from '../utils/download'
-import { formatClock, formatHeading, formatMeters, formatNumber, formatSpeed } from '../utils/format'
+import {
+  formatClock,
+  formatHeading,
+  formatMeters,
+  formatNumber,
+  formatSpeed,
+} from '../utils/format'
 
 /** HUD 采样间隔 —— 与沙盒页一致,10 Hz 足够看,不必每帧刷 Vue */
 const HUD_SECONDS = 0.1
@@ -182,11 +189,23 @@ function polyline(values: ReadonlyArray<number>, peak: number): string {
 }
 
 const altitudeLine = computed(() =>
-  polyline(downsample(series.value.map((item) => item.altitude), CHART_POINTS), statistics.value?.maxAltitude ?? 0),
+  polyline(
+    downsample(
+      series.value.map((item) => item.altitude),
+      CHART_POINTS,
+    ),
+    statistics.value?.maxAltitude ?? 0,
+  ),
 )
 
 const speedLine = computed(() =>
-  polyline(downsample(series.value.map((item) => item.speed), CHART_POINTS), statistics.value?.maxSpeed ?? 0),
+  polyline(
+    downsample(
+      series.value.map((item) => item.speed),
+      CHART_POINTS,
+    ),
+    statistics.value?.maxSpeed ?? 0,
+  ),
 )
 
 const cursorX = computed(() => progress.value * CHART_W)
@@ -245,7 +264,10 @@ function exportReport(format: ResultFormat): void {
   if (!current) return
   const text = exportTaskResult(current, format)
   const extension = format === 'markdown' ? 'md' : format
-  downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `飞行报告_${timestampTag()}.${extension}`)
+  downloadBlob(
+    new Blob([text], { type: 'text/plain;charset=utf-8' }),
+    `飞行报告_${timestampTag()}.${extension}`,
+  )
 }
 
 function levelLabel(level: string): string {
@@ -265,7 +287,8 @@ function levelLabel(level: string): string {
 
 function frame(timestamp: number): void {
   frameId = window.requestAnimationFrame(frame)
-  const delta = lastFrameTime === 0 ? 0 : Math.min((timestamp - lastFrameTime) / 1000, MAX_FRAME_DELTA)
+  const delta =
+    lastFrameTime === 0 ? 0 : Math.min((timestamp - lastFrameTime) / 1000, MAX_FRAME_DELTA)
   lastFrameTime = timestamp
 
   controller?.update(delta)
@@ -305,6 +328,7 @@ async function mount(): Promise<void> {
     // 机体在回放里固定为展开态 —— 记录数据没有机臂状态,展开是飞行时的必然
     body: (context) => DroneView.load(context.loader, context.scene, { initialArmFold: 0 }),
     obstacles: scenarioToSceneObstacles(current.scenario),
+    pointCloud: current.scenario.id === CAMPUS_SCENE_ID ? campusPointCloud : undefined,
     initialCameraTarget: { x: 0, y: 1.2, z: 0 },
   })
   adapter = next
@@ -383,7 +407,12 @@ onBeforeUnmount(() => {
 
         <!-- 时间轴:回放的唯一驱动入口 -->
         <div class="timeline" data-testid="replay-timeline">
-          <button class="primary timeline__play" type="button" data-testid="replay-play" @click="togglePlay">
+          <button
+            class="primary timeline__play"
+            type="button"
+            data-testid="replay-play"
+            @click="togglePlay"
+          >
             {{ playing ? '暂停' : '播放' }}
           </button>
 
@@ -401,7 +430,7 @@ onBeforeUnmount(() => {
             data-testid="replay-range"
             aria-label="回放进度"
             @input="onScrub"
-          >
+          />
 
           <div class="timeline__speeds" role="group" aria-label="播放倍速">
             <button
@@ -439,9 +468,26 @@ onBeforeUnmount(() => {
               <span>高度</span>
               <span class="mono">峰值 {{ formatMeters(statistics?.maxAltitude) }}</span>
             </figcaption>
-            <svg class="chart__svg" :viewBox="`0 0 ${CHART_W} ${CHART_H}`" preserveAspectRatio="none" role="img" aria-label="高度曲线">
-              <polyline class="chart__line chart__line--alt" :points="altitudeLine" vector-effect="non-scaling-stroke" />
-              <line class="chart__cursor" :x1="cursorX" y1="0" :x2="cursorX" :y2="CHART_H" vector-effect="non-scaling-stroke" />
+            <svg
+              class="chart__svg"
+              :viewBox="`0 0 ${CHART_W} ${CHART_H}`"
+              preserveAspectRatio="none"
+              role="img"
+              aria-label="高度曲线"
+            >
+              <polyline
+                class="chart__line chart__line--alt"
+                :points="altitudeLine"
+                vector-effect="non-scaling-stroke"
+              />
+              <line
+                class="chart__cursor"
+                :x1="cursorX"
+                y1="0"
+                :x2="cursorX"
+                :y2="CHART_H"
+                vector-effect="non-scaling-stroke"
+              />
             </svg>
           </figure>
 
@@ -450,9 +496,26 @@ onBeforeUnmount(() => {
               <span>水平速度</span>
               <span class="mono">峰值 {{ formatSpeed(statistics?.maxSpeed) }}</span>
             </figcaption>
-            <svg class="chart__svg" :viewBox="`0 0 ${CHART_W} ${CHART_H}`" preserveAspectRatio="none" role="img" aria-label="速度曲线">
-              <polyline class="chart__line chart__line--speed" :points="speedLine" vector-effect="non-scaling-stroke" />
-              <line class="chart__cursor" :x1="cursorX" y1="0" :x2="cursorX" :y2="CHART_H" vector-effect="non-scaling-stroke" />
+            <svg
+              class="chart__svg"
+              :viewBox="`0 0 ${CHART_W} ${CHART_H}`"
+              preserveAspectRatio="none"
+              role="img"
+              aria-label="速度曲线"
+            >
+              <polyline
+                class="chart__line chart__line--speed"
+                :points="speedLine"
+                vector-effect="non-scaling-stroke"
+              />
+              <line
+                class="chart__cursor"
+                :x1="cursorX"
+                y1="0"
+                :x2="cursorX"
+                :y2="CHART_H"
+                vector-effect="non-scaling-stroke"
+              />
             </svg>
           </figure>
         </section>
@@ -461,13 +524,17 @@ onBeforeUnmount(() => {
         <section class="card">
           <h2 class="card__title">
             事件时间线
-            <span class="mono card__count">{{ view?.events.length ?? 0 }} / {{ entry.data.events.length }}</span>
+            <span class="mono card__count"
+              >{{ view?.events.length ?? 0 }} / {{ entry.data.events.length }}</span
+            >
           </h2>
           <ul class="events" data-testid="replay-events">
             <li v-for="item in visibleEvents" :key="item.eventId">
               <button type="button" class="events__row" @click="seekToEvent(item.simulationTime)">
                 <span class="events__time mono">{{ formatClock(item.simulationTime) }}</span>
-                <span class="events__level" :class="`events__level--${item.level}`">{{ levelLabel(item.level) }}</span>
+                <span class="events__level" :class="`events__level--${item.level}`">{{
+                  levelLabel(item.level)
+                }}</span>
                 <span class="events__text">{{ item.message ?? item.type }}</span>
               </button>
             </li>
@@ -486,8 +553,8 @@ onBeforeUnmount(() => {
             <div v-for="agent in view?.agents ?? []" :key="agent.agentId" class="now__row">
               <dt>{{ agent.label }}</dt>
               <dd class="mono">
-                E {{ agent.position.x.toFixed(1) }} · 高 {{ agent.position.y.toFixed(1) }} ·
-                南 {{ agent.position.z.toFixed(1) }} · 朝向 {{ formatHeading(agent.headingDeg) }}
+                E {{ agent.position.x.toFixed(1) }} · 高 {{ agent.position.y.toFixed(1) }} · 南
+                {{ agent.position.z.toFixed(1) }} · 朝向 {{ formatHeading(agent.headingDeg) }}
               </dd>
             </div>
             <div class="now__row">
@@ -501,8 +568,12 @@ onBeforeUnmount(() => {
         <section class="card">
           <h2 class="card__title">导出结果</h2>
           <div class="exports">
-            <button type="button" data-testid="export-json" @click="exportReport('json')">JSON</button>
-            <button type="button" data-testid="export-markdown" @click="exportReport('markdown')">Markdown</button>
+            <button type="button" data-testid="export-json" @click="exportReport('json')">
+              JSON
+            </button>
+            <button type="button" data-testid="export-markdown" @click="exportReport('markdown')">
+              Markdown
+            </button>
             <button type="button" data-testid="export-csv" @click="exportReport('csv')">CSV</button>
           </div>
           <p v-if="summary" class="hint">{{ summary.headline }}</p>
