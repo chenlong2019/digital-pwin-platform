@@ -97,6 +97,22 @@ try {
       assert.ok(report.training_history.length > 1)
       assert.deepEqual(errors, [])
       await page.getByTestId('experiment-report').waitFor({ state: 'visible', timeout: 10_000 })
+      // Existing reports can arrive before the point-cloud worker has decoded
+      // the preview. Wait for both scene readiness and test images before export.
+      await page.waitForFunction(
+        () => !document.querySelector('[data-testid="experiment-start"]')?.disabled,
+        null,
+        { timeout: 60_000 },
+      )
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll('.comparison-grid img')].every(
+            (img) => img.complete && img.naturalWidth > 0,
+          ),
+        null,
+        { timeout: 10_000 },
+      )
+      await page.mouse.move(0, 0)
       const destination = path.join(
         root,
         'services/neural-render-service/data/experiment-deliverables',
