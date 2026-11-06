@@ -91,6 +91,25 @@ cd services/neural-render-service
 .\.venv-3dgs\Scripts\python.exe -m app.gaussian.compare --baseline data/experiments/job-943980563615 --candidate data/experiments/job-75fc935ba176
 ```
 
+## 在 Three.js 中交互查看高斯模型
+
+实验结果页顶部和“独立测试结果”区域都有“查看三维模型”入口，地址为 `/experiments/<job_id>/model`。本机高清结果可直接打开：
+
+`http://127.0.0.1:45679/experiments/job-75fc935ba176/model`
+
+- 加载该任务导出的 `model.ply`，在 Three.js 场景中按真实的三轴尺度、四元数旋转、颜色及透明度绘制高斯，并进行深度排序和 alpha 合成。
+- 支持鼠标旋转、平移、滚轮缩放与触屏操作，提供重置、俯视、自动环绕及 8 个独立测试相机的快捷切换。
+- 保留导出时的 `platform-world` 坐标、米制单位和 +Y 向上，无额外翻转；测试相机从 Manifest 读取位置、四元数和垂直视场角。视口的宽高比例决定显示范围，截图不等同于报告中固定尺寸的评价图。
+- 检查任务完成状态、模型数量与报告一致性。加载失败或 WebGL 连接丢失可重新加载，离开页面时中断请求并释放场景、纹理、排序资源及画布。
+
+渲染适配器位于 `packages/three-adapter/src/gaussian-splat-scene.ts`，页面位于 `apps/drone-simulator/src/views/GaussianModelView.vue`。依赖 MIT 协议的 `@sparkjsdev/spark@2.4.0`，与现有 Three.js r186/WebGL2 配合；采用扩展精度存储、关闭自动 LOD，默认显示该次模型的全部高斯。解码器随应用打包，通过动态导入仅在打开模型页时加载，无须外部 CDN、服务端渲染流或新的训练。
+
+底部 FPS 是浏览器动画循环的显示频率，受屏幕刷新率、页面可见性和本机负载影响。它与报告中同步测量的 PyTorch 后端渲染 FPS 使用不同渲染器和口径，不用于证明算法加速倍数，也不替代独立测试指标。
+
+浏览器测试使用与训练导出一致的二进制 Gaussian PLY，验证实际画面随视角改变、重新进入页面、加载失败重试、未完成实验、损坏文件与窄屏布局；相机数值测试验证位置、坐标轴、四元数、内参与非法输入。真实高清模型也在生产预览中实际加载验证。
+
+已有 UI/API 服务时运行 `node scripts/verify-gaussian-viewer.mjs --job=<job_id>` 可验证真实结果入口、拖拽、缩放、视角、刷新和移动端，并导出截图与验证记录到该实验的 `data/experiment-deliverables/<job_id>/three-viewer/`。该检查不会启动新训练。
+
 ## 可恢复性与输出
 
 - 采集失败或暂停后，点击“继续采集”，按已保存的 frameId 跳过完成帧。测试视角不足时禁止提交训练；已有足够数据时可点击“提交已有数据训练”，系统先封存再提交。

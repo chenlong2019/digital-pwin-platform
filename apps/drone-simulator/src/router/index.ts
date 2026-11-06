@@ -6,6 +6,12 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
+      path: '/experiments/:jobId/model',
+      name: 'gaussian-model',
+      component: () => import('../views/GaussianModelView.vue'),
+      meta: { title: '高斯三维模型' },
+    },
+    {
       path: '/experiments',
       name: 'experiments',
       component: () => import('../views/ExperimentView.vue'),

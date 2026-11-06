@@ -86,6 +86,10 @@ test('指定实验链接恢复结果，报告读取失败后自动重试，切�
   await expect(page.getByTestId('experiment-report')).toBeVisible({ timeout: 12_000 })
   await expect(page.getByRole('alert')).toHaveCount(0)
   await expect(page.locator('.metric-grid')).toContainText('22.05')
+  await expect(page.getByRole('link', { name: '查看三维模型 ↗' }).first()).toHaveAttribute(
+    'href',
+    `/experiments/${jobId}/model`,
+  )
   await page.locator('.view-picker select').selectOption('1')
   await expect(page.getByAltText('训练后的高斯渲染')).toHaveAttribute(
     'src',

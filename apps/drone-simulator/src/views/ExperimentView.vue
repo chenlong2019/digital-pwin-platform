@@ -409,6 +409,12 @@ onBeforeUnmount(() => {
         <p class="subtitle">采集、重建与独立测试，在一次实验中完成。</p>
       </div>
       <nav>
+        <RouterLink
+          v-if="report && job"
+          class="model-link"
+          :to="{ name: 'gaussian-model', params: { jobId: job.job_id } }"
+          >查看三维模型 ↗</RouterLink
+        >
         <button v-if="report" class="results-link" @click="showResults">查看结果 ↓</button>
         <RouterLink to="/console">控制台</RouterLink><RouterLink to="/">仿真沙盒</RouterLink>
       </nav>
@@ -556,6 +562,12 @@ onBeforeUnmount(() => {
       <div class="section-head">
         <h2 id="experiment-results-title">独立测试结果</h2>
         <div class="downloads">
+          <RouterLink
+            v-if="job"
+            class="model-link"
+            :to="{ name: 'gaussian-model', params: { jobId: job.job_id } }"
+            >查看三维模型 ↗</RouterLink
+          >
           <a :href="artifact('report.json')" target="_blank" rel="noreferrer">评价报告</a
           ><a :href="artifact('model.ply')">高斯模型 PLY</a>
         </div>
@@ -753,6 +765,7 @@ h1 {
 nav,
 .downloads {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
 }
@@ -760,6 +773,14 @@ nav,
   color: #9be0cf;
   background: #153a36;
   border-color: #397968;
+}
+.model-link {
+  padding: 9px 12px;
+  background: #153a36;
+  border: 1px solid #397968;
+  border-radius: 7px;
+  color: #9be0cf;
+  white-space: nowrap;
 }
 a {
   color: #8ddac9;
